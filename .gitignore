@@ -1,0 +1,43 @@
+# Python specific
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# IDE / Editor specific
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sublime-project
+*.sublime-workspace
+
+# Playwright specific (if any local browser data were to be stored in project, though typically system-wide)
+# Add any specific Playwright directories if you configure user data dirs locally
+
+# XScraper specific
+x_session.json
+last_tweet_id.txt
+tweets.json
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+logs/
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml 
