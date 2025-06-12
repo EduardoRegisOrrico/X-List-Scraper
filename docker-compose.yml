@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  x-scraper:
+    build: .
+    container_name: x-scraper
+    restart: unless-stopped
+    
+    # Environment variables from .env file
+    env_file:
+      - .env
+    
+    # Additional environment variables
+    environment:
+      - DATA_DIR=/app/data
+    
+    # Volume mounts for persistence
+    volumes:
+      - ./data:/app/data  # Session files, tweets, etc.
+      - ./logs:/app/logs  # Optional: for log files
+    
+    # Network mode for database access
+    network_mode: host
+    
+    # Resource limits (optional)
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    
+    # Override default command with monitoring
+    command: >
+      python scraper.py 
+      --url "https://x.com/i/lists/1919380958723158457"
+      --interval 60
+      --scrolls 2
+      --limit 10
+
+  # Optional: Database monitoring service
+  db-monitor:
+    build: .
+    container_name: x-scraper-db-monitor
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: python check_connections.py
+    profiles:
+      - monitoring 
