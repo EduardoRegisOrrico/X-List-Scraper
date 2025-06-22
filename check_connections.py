@@ -13,6 +13,38 @@ def get_db_params():
     """Get database connection parameters from environment."""
     load_dotenv()
     
+    # First priority: DATABASE_URL (newsio-single format)
+    database_url = os.getenv("DATABASE_URL")
+    
+    if database_url:
+        print("Using DATABASE_URL connection string...")
+        # Parse the DATABASE_URL
+        parsed_url = urlparse(database_url)
+        conn_params = {
+            'dbname': parsed_url.path[1:],  # Remove leading slash
+            'user': parsed_url.username,
+            'password': parsed_url.password,
+            'host': parsed_url.hostname,
+            'port': parsed_url.port or 5432
+        }
+        
+        # Handle query parameters (like schema)
+        options = []
+        if parsed_url.query:
+            # Handle schema parameter if present
+            if 'schema=' in parsed_url.query:
+                schema_name = parsed_url.query.split('schema=')[-1].split('&')[0]
+                options.append(f'search_path={schema_name},public')
+        
+        # Remove IPv4 address family preference as it's not supported
+        # options.append('addr_type=ipv4')
+        
+        if options:
+            conn_params['options'] = f"-c {' -c '.join(options)}"
+            
+        return conn_params
+    
+    # Fallback: Individual parameters (legacy XScraper format)
     user = os.getenv("user")
     password = os.getenv("password")
     host = os.getenv("host")
@@ -20,10 +52,11 @@ def get_db_params():
     dbname = os.getenv("dbname")
     
     if not all([user, password, host, port, dbname]):
-        # Try the old method using SUPABASE_DATABASE_URL as fallback
+        # Final fallback: SUPABASE_DATABASE_URL (old format)
         db_url = os.getenv("SUPABASE_DATABASE_URL")
         if not db_url:
             print("Error: Database connection parameters not found in .env file.")
+            print("Expected: DATABASE_URL or individual parameters (user, password, host, port, dbname)")
             return None
             
         # Parse connection URL
@@ -42,8 +75,8 @@ def get_db_params():
             schema_name = parsed_url.query.split('schema=')[-1].split('&')[0]
             options.append(f'search_path={schema_name},public')
         
-        # Add IPv4 address family preference
-        options.append('addr_type=ipv4')
+        # Remove IPv4 address family preference as it's not supported
+        # options.append('addr_type=ipv4')
         
         if options:
             conn_params['options'] = f"-c {' -c '.join(options)}"
@@ -53,7 +86,7 @@ def get_db_params():
             'user': user,
             'password': password,
             'host': host,
-            'port': port,
+            'port': int(port),
             'dbname': dbname
         }
     
