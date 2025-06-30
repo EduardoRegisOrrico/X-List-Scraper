@@ -763,8 +763,13 @@ def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, contex
 def trigger_tweet_analysis():
     """Trigger the tweet analysis API endpoint."""
     try:
+        # Get the API base URL from environment or use default
+        load_dotenv()
+        api_base_url = os.getenv("API_BASE_URL", "http://localhost:3000")
+        api_url = f"{api_base_url}/api/twitter/analyze"
+        
         # Make a POST request to the analysis endpoint
-        response = requests.post("http://newstraderai.com/api/twitter/analyze", timeout=10)
+        response = requests.post(api_url, timeout=10)
         
         # Check if the request was successful
         if response.status_code == 200:
@@ -772,6 +777,7 @@ def trigger_tweet_analysis():
             return True
         else:
             print(f"Failed to trigger tweet analysis API. Status code: {response.status_code}")
+            print(f"API URL: {api_url}")
             return False
     except Exception as e:
         print(f"Error triggering tweet analysis API: {e}")
@@ -1013,11 +1019,14 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
     # Initialize browser before main loop
     pw_runtime, browser_monitor, context_monitor = initialize_browser(headless)
     
+    session_available = False
     try:
-        if not load_cookies(context_monitor):
-            # Don't try to handle login here; it should have been done separately
-            print("No valid session found. Please run the script with --login first.")
-            return
+        if load_cookies(context_monitor):
+            session_available = True
+            print("Valid session found. Using full browser-based monitoring.")
+        else:
+            print("No valid session found. Continuing with lightweight checks only.")
+            print("Note: You can run with --login to enable full browser monitoring.")
         
         print(f"Starting real-time monitoring of {list_url}")
         print(f"Checking for new tweets every {interval} seconds")
@@ -1031,19 +1040,33 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             try:
                 print(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking for new tweets...")
                 
-                newly_scraped_tweets, newest_id_from_scrape = scrape_list(
-                    list_url, 
-                    max_scrolls=max_scrolls, 
-                    wait_time=wait_time,
-                    browser_param=browser_monitor,
-                    context_param=context_monitor,
-                    last_tweet_id=last_tweet_id,
-                    limit=limit
-                )
+                newly_scraped_tweets = []
+                newest_id_from_scrape = None
                 
-                consecutive_error_count = 0
-                current_wait_time = base_wait_time
-                print(f"Successful request. Resuming normal interval of {current_wait_time} seconds.")
+                if session_available:
+                    # Try browser-based scraping first
+                    newly_scraped_tweets, newest_id_from_scrape = scrape_list(
+                        list_url, 
+                        max_scrolls=max_scrolls, 
+                        wait_time=wait_time,
+                        browser_param=browser_monitor,
+                        context_param=context_monitor,
+                        last_tweet_id=last_tweet_id,
+                        limit=limit
+                    )
+                    consecutive_error_count = 0
+                    current_wait_time = base_wait_time
+                    print(f"Successful browser request. Resuming normal interval of {current_wait_time} seconds.")
+                else:
+                    # No session available, use lightweight check immediately
+                    print("No browser session - using lightweight check...")
+                    newly_scraped_tweets, newest_id_from_scrape = perform_lightweight_check(list_url, last_tweet_id, limit)
+                    if newly_scraped_tweets:
+                        consecutive_error_count = 0
+                        current_wait_time = base_wait_time
+                        print(f"Successful lightweight request. Found {len(newly_scraped_tweets)} tweets.")
+                    else:
+                        print("No tweets found via lightweight check.")
             
                 if newest_id_from_scrape and (last_tweet_id is None or int(newest_id_from_scrape) > int(last_tweet_id)):
                     last_tweet_id = newest_id_from_scrape
@@ -1098,25 +1121,34 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     print("No new tweets found this cycle.")
 
             except PageLoadError as ple:
-                print(f"Page load/scrape error during cycle: {ple}")
-                consecutive_error_count += 1
-                current_wait_time = min(1800, base_wait_time * (2 ** consecutive_error_count))
-                print(f"Possible rate limiting detected. Implementing backoff: {current_wait_time} seconds.")
-                if consecutive_error_count >= 3:
-                    print("Multiple consecutive errors. Reinitializing browser...")
-                    try:
-                        if browser_monitor: browser_monitor.close()
-                        if pw_runtime: pw_runtime.stop()
-                    except Exception as e_cleanup: print(f"Error during browser cleanup: {e_cleanup}")
-                    time.sleep(5)
-                    pw_runtime, browser_monitor, context_monitor = initialize_browser(headless)
-                    load_cookies(context_monitor)
-                    print("Browser reinitialized with fresh session.")
-                if consecutive_error_count >= max_consecutive_errors:
-                    print(f"Reached maximum consecutive errors ({max_consecutive_errors}). This is NOT fatal - will continue after backoff period.")
-                    print(f"Backing off for {current_wait_time} seconds before trying again...")
+                if session_available:
+                    print(f"Page load/scrape error during cycle: {ple}")
+                    consecutive_error_count += 1
+                    current_wait_time = min(1800, base_wait_time * (2 ** consecutive_error_count))
+                    print(f"Possible rate limiting detected. Implementing backoff: {current_wait_time} seconds.")
+                    if consecutive_error_count >= 3:
+                        print("Multiple consecutive errors. Reinitializing browser...")
+                        try:
+                            if browser_monitor: browser_monitor.close()
+                            if pw_runtime: pw_runtime.stop()
+                        except Exception as e_cleanup: print(f"Error during browser cleanup: {e_cleanup}")
+                        time.sleep(5)
+                        pw_runtime, browser_monitor, context_monitor = initialize_browser(headless)
+                        if load_cookies(context_monitor):
+                            session_available = True
+                            print("Browser reinitialized with fresh session.")
+                        else:
+                            session_available = False
+                            print("Browser reinitialized but no valid session - continuing with lightweight checks only.")
+                    if consecutive_error_count >= max_consecutive_errors:
+                        print(f"Reached maximum consecutive errors ({max_consecutive_errors}). This is NOT fatal - will continue after backoff period.")
+                        print(f"Backing off for {current_wait_time} seconds before trying again...")
+                    else:
+                        print(f"Consecutive errors: {consecutive_error_count}/{max_consecutive_errors}. Backing off for {current_wait_time} seconds.")
                 else:
-                    print(f"Consecutive errors: {consecutive_error_count}/{max_consecutive_errors}. Backing off for {current_wait_time} seconds.")
+                    # This shouldn't happen in lightweight mode, but handle it gracefully
+                    print(f"Unexpected PageLoadError in lightweight mode: {ple}")
+                    consecutive_error_count += 1
             
             except Exception as e_cycle:
                 print(f"Unexpected error during scraping cycle: {e_cycle}")
