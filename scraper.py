@@ -25,6 +25,100 @@ MAX_TWEETS_HISTORY = 500  # Maximum number of tweets to keep in tweets.json
 class PageLoadError(Exception):
     pass
 
+def auto_login():
+    """Automatically login using credentials from environment variables"""
+    load_dotenv()
+    email = os.getenv("X_EMAIL")
+    password = os.getenv("X_PASSWORD")
+    
+    if not email or not password:
+        print("X_EMAIL and X_PASSWORD environment variables are required for auto-login")
+        return False
+    
+    print("\n=== Automatic X.com Login ===")
+    print("Attempting to login automatically...")
+    
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)  # Run headless for auto-login
+            context = browser.new_context(
+                viewport={"width": 1024, "height": 768},
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            
+            # Clear any existing cookies first
+            if os.path.exists(SESSION_FILE):
+                os.remove(SESSION_FILE)
+                print("Removed existing session file.")
+            
+            page = context.new_page()
+            print("Opening X.com login page...")
+            
+            try:
+                page.goto("https://x.com/login", timeout=30000)
+                print("Login page loaded. Filling in credentials...")
+                
+                # Wait for and fill email/username field
+                email_selector = 'input[name="text"]'
+                page.wait_for_selector(email_selector, timeout=10000)
+                page.fill(email_selector, email)
+                print("Email filled.")
+                
+                # Click Next button
+                next_button = page.locator('text="Next"').first
+                next_button.click()
+                time.sleep(2)
+                
+                # Wait for and fill password field
+                password_selector = 'input[name="password"]'
+                page.wait_for_selector(password_selector, timeout=10000)
+                page.fill(password_selector, password)
+                print("Password filled.")
+                
+                # Click Login button
+                login_button = page.locator('text="Log in"').first
+                login_button.click()
+                print("Login button clicked. Waiting for authentication...")
+                
+                # Wait for successful login (check for home page elements)
+                try:
+                    # Wait for navigation to complete and check for login success
+                    page.wait_for_url("**/home", timeout=15000)
+                    print("Successfully navigated to home page.")
+                    
+                    # Additional verification
+                    if page.query_selector("[data-testid='SideNav_AccountSwitcher_Button']") or page.query_selector("[data-testid='tweet']"):
+                        print("Login verification successful!")
+                        
+                        # Save cookies
+                        save_cookies(context)
+                        print("Session saved successfully!")
+                        return True
+                    else:
+                        print("Warning: Could not verify successful login elements.")
+                        save_cookies(context)
+                        return True
+                        
+                except PlaywrightTimeoutError:
+                    print("Login may have failed or requires additional verification (2FA, etc.)")
+                    # Try to save session anyway in case login was successful but slow
+                    save_cookies(context)
+                    return False
+                    
+            except Exception as page_error:
+                print(f"Error during login process: {page_error}")
+                return False
+            finally:
+                try:
+                    page.close()
+                    browser.close()
+                except:
+                    pass
+                    
+    except Exception as e:
+        print(f"\nError during auto-login: {e}")
+        return False
+
 def handle_login():
     """Handles the explicit login process when --login flag is used"""
     print("\n=== X.com Login Process ===")
@@ -1025,8 +1119,20 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             session_available = True
             print("Valid session found. Using full browser-based monitoring.")
         else:
-            print("No valid session found. Continuing with lightweight checks only.")
-            print("Note: You can run with --login to enable full browser monitoring.")
+            print("No valid session found. Attempting automatic login...")
+            # Try automatic login
+            if auto_login():
+                print("Automatic login successful! Reloading session...")
+                # Reload cookies after successful auto-login
+                if load_cookies(context_monitor):
+                    session_available = True
+                    print("Session loaded successfully. Using full browser-based monitoring.")
+                else:
+                    print("Warning: Auto-login succeeded but session reload failed.")
+                    print("Continuing with lightweight checks only.")
+            else:
+                print("Automatic login failed. Continuing with lightweight checks only.")
+                print("Note: You can run with --login to enable manual login.")
         
         print(f"Starting real-time monitoring of {list_url}")
         print(f"Checking for new tweets every {interval} seconds")
