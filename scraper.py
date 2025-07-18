@@ -758,7 +758,8 @@ def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, contex
             browser_to_use = playwright_instance_local.chromium.launch(headless=True)
             context_to_use = browser_to_use.new_context(viewport={"width": 1920, "height": 1080})
             if not load_cookies(context_to_use):
-                raise PageLoadError("Session not found for standalone scrape. Please run with --login first.")
+                print("No session found for scraping. Returning empty result.")
+                return [], None
 
         page = context_to_use.new_page()
         page.on("response", lambda response: _xhr_calls_buffer.append(response) if response.request.resource_type == "xhr" and ("ListLatestTweetsTimeline" in response.url or "Timeline" in response.url) else None)
