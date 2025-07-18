@@ -25,7 +25,7 @@ MAX_TWEETS_HISTORY = 500  # Maximum number of tweets to keep in tweets.json
 class PageLoadError(Exception):
     pass
 
-def auto_login():
+def auto_login(existing_context=None):
     """Automatically login using credentials from environment variables"""
     load_dotenv()
     email = os.getenv("X_EMAIL")
@@ -39,79 +39,86 @@ def auto_login():
     print("Attempting to login automatically...")
     
     try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)  # Run headless for auto-login
-            context = browser.new_context(
-                viewport={"width": 1024, "height": 768},
-                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            
-            # Clear any existing cookies first
-            if os.path.exists(SESSION_FILE):
-                os.remove(SESSION_FILE)
-                print("Removed existing session file.")
-            
+        # Use existing context if provided, otherwise create new one
+        if existing_context:
+            context = existing_context
             page = context.new_page()
-            print("Opening X.com login page...")
+            should_close_page = True
+        else:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                context = browser.new_context(
+                    viewport={"width": 1024, "height": 768},
+                    user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = context.new_page()
+                should_close_page = False
+        
+        # Clear any existing cookies first
+        if os.path.exists(SESSION_FILE):
+            os.remove(SESSION_FILE)
+            print("Removed existing session file.")
+        
+        print("Opening X.com login page...")
+        
+        try:
+            page.goto("https://x.com/login", timeout=30000)
+            print("Login page loaded. Filling in credentials...")
             
+            # Wait for and fill email/username field
+            email_selector = 'input[name="text"]'
+            page.wait_for_selector(email_selector, timeout=10000)
+            page.fill(email_selector, email)
+            print("Email filled.")
+            
+            # Click Next button
+            next_button = page.locator('text="Next"').first
+            next_button.click()
+            time.sleep(2)
+            
+            # Wait for and fill password field
+            password_selector = 'input[name="password"]'
+            page.wait_for_selector(password_selector, timeout=10000)
+            page.fill(password_selector, password)
+            print("Password filled.")
+            
+            # Click Login button
+            login_button = page.locator('text="Log in"').first
+            login_button.click()
+            print("Login button clicked. Waiting for authentication...")
+            
+            # Wait for successful login (check for home page elements)
             try:
-                page.goto("https://x.com/login", timeout=30000)
-                print("Login page loaded. Filling in credentials...")
+                # Wait for navigation to complete and check for login success
+                page.wait_for_url("**/home", timeout=15000)
+                print("Successfully navigated to home page.")
                 
-                # Wait for and fill email/username field
-                email_selector = 'input[name="text"]'
-                page.wait_for_selector(email_selector, timeout=10000)
-                page.fill(email_selector, email)
-                print("Email filled.")
-                
-                # Click Next button
-                next_button = page.locator('text="Next"').first
-                next_button.click()
-                time.sleep(2)
-                
-                # Wait for and fill password field
-                password_selector = 'input[name="password"]'
-                page.wait_for_selector(password_selector, timeout=10000)
-                page.fill(password_selector, password)
-                print("Password filled.")
-                
-                # Click Login button
-                login_button = page.locator('text="Log in"').first
-                login_button.click()
-                print("Login button clicked. Waiting for authentication...")
-                
-                # Wait for successful login (check for home page elements)
-                try:
-                    # Wait for navigation to complete and check for login success
-                    page.wait_for_url("**/home", timeout=15000)
-                    print("Successfully navigated to home page.")
+                # Additional verification
+                if page.query_selector("[data-testid='SideNav_AccountSwitcher_Button']") or page.query_selector("[data-testid='tweet']"):
+                    print("Login verification successful!")
                     
-                    # Additional verification
-                    if page.query_selector("[data-testid='SideNav_AccountSwitcher_Button']") or page.query_selector("[data-testid='tweet']"):
-                        print("Login verification successful!")
-                        
-                        # Save cookies
-                        save_cookies(context)
-                        print("Session saved successfully!")
-                        return True
-                    else:
-                        print("Warning: Could not verify successful login elements.")
-                        save_cookies(context)
-                        return True
-                        
-                except PlaywrightTimeoutError:
-                    print("Login may have failed or requires additional verification (2FA, etc.)")
-                    # Try to save session anyway in case login was successful but slow
+                    # Save cookies
                     save_cookies(context)
-                    return False
+                    print("Session saved successfully!")
+                    return True
+                else:
+                    print("Warning: Could not verify successful login elements.")
+                    save_cookies(context)
+                    return True
                     
-            except Exception as page_error:
-                print(f"Error during login process: {page_error}")
+            except PlaywrightTimeoutError:
+                print("Login may have failed or requires additional verification (2FA, etc.)")
+                # Try to save session anyway in case login was successful but slow
+                save_cookies(context)
                 return False
-            finally:
+                
+        except Exception as page_error:
+            print(f"Error during login process: {page_error}")
+            return False
+        finally:
+            if should_close_page:
                 try:
                     page.close()
-                    browser.close()
                 except:
                     pass
                     
@@ -1121,8 +1128,8 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             print("Valid session found. Using full browser-based monitoring.")
         else:
             print("No valid session found. Attempting automatic login...")
-            # Try automatic login
-            if auto_login():
+            # Try automatic login using existing context
+            if auto_login(context_monitor):
                 print("Automatic login successful! Reloading session...")
                 # Reload cookies after successful auto-login
                 if load_cookies(context_monitor):
