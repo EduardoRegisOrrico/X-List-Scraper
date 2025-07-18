@@ -29,7 +29,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=2s --timeout=10s --start-period=5s --retries=3 \
     CMD python check_connections.py || exit 1
 
 # Default command
