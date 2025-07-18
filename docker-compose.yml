@@ -19,8 +19,9 @@ services:
       - ./data:/app/data  # Session files, tweets, etc.
       - ./logs:/app/logs  # Optional: for log files
     
-    # Network mode for database access
-    network_mode: host
+    # Network configuration for database access
+    networks:
+      - newsio-network
     
     # Resource limits (optional)
     deploy:
@@ -48,5 +49,12 @@ services:
     env_file:
       - .env
     command: python check_connections.py
+    networks:
+      - newsio-network
     profiles:
       - monitoring 
+
+networks:
+  newsio-network:
+    external: true
+    name: newsio-single_newsio-network
