@@ -44,15 +44,16 @@ def auto_login(existing_context=None):
             context = existing_context
             page = context.new_page()
             should_close_page = True
+            browser = None
         else:
-            with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True)
-                context = browser.new_context(
-                    viewport={"width": 1024, "height": 768},
-                    user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-                page = context.new_page()
-                should_close_page = False
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(
+                viewport={"width": 1024, "height": 768},
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+            should_close_page = True
         
         # Clear any existing cookies first
         if os.path.exists(SESSION_FILE):
@@ -197,6 +198,13 @@ def auto_login(existing_context=None):
             if should_close_page:
                 try:
                     page.close()
+                except:
+                    pass
+            # Clean up browser and playwright if we created them
+            if browser:
+                try:
+                    browser.close()
+                    pw.stop()
                 except:
                     pass
                     
