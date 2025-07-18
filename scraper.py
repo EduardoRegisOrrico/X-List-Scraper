@@ -65,26 +65,104 @@ def auto_login(existing_context=None):
             page.goto("https://x.com/login", timeout=30000)
             print("Login page loaded. Filling in credentials...")
             
-            # Wait for and fill email/username field
-            email_selector = 'input[name="text"]'
-            page.wait_for_selector(email_selector, timeout=10000)
-            page.fill(email_selector, email)
-            print("Email filled.")
+            # Wait for and fill email/username field - try multiple selectors
+            email_filled = False
+            email_selectors = [
+                'input[name="text"]',
+                'input[autocomplete="username"]',
+                'input[data-testid="ocfEnterTextTextInput"]',
+                'input[placeholder*="email"]',
+                'input[placeholder*="username"]',
+                'input[type="text"]'
+            ]
             
-            # Click Next button
-            next_button = page.locator('text="Next"').first
-            next_button.click()
+            for selector in email_selectors:
+                try:
+                    page.wait_for_selector(selector, timeout=5000)
+                    page.fill(selector, email)
+                    print(f"Email filled using selector: {selector}")
+                    email_filled = True
+                    break
+                except:
+                    continue
+            
+            if not email_filled:
+                print("Could not find email input field")
+                return False
+            
+            # Click Next button - try multiple approaches
             time.sleep(2)
+            next_clicked = False
+            next_approaches = [
+                lambda: page.locator('text="Next"').first.click(),
+                lambda: page.locator('[data-testid="LoginForm_Login_Button"]').click(),
+                lambda: page.locator('button:has-text("Next")').click(),
+                lambda: page.locator('div[role="button"]:has-text("Next")').click(),
+                lambda: page.locator('span:has-text("Next")').click()
+            ]
             
-            # Wait for and fill password field
-            password_selector = 'input[name="password"]'
-            page.wait_for_selector(password_selector, timeout=10000)
-            page.fill(password_selector, password)
-            print("Password filled.")
+            for approach in next_approaches:
+                try:
+                    approach()
+                    print("Next button clicked")
+                    next_clicked = True
+                    break
+                except:
+                    continue
             
-            # Click Login button
-            login_button = page.locator('text="Log in"').first
-            login_button.click()
+            if not next_clicked:
+                print("Could not click Next button")
+                return False
+            
+            time.sleep(3)
+            
+            # Wait for and fill password field - try multiple selectors
+            password_filled = False
+            password_selectors = [
+                'input[name="password"]',
+                'input[type="password"]',
+                'input[autocomplete="current-password"]',
+                'input[data-testid="ocfEnterTextTextInput"]'
+            ]
+            
+            for selector in password_selectors:
+                try:
+                    page.wait_for_selector(selector, timeout=5000)
+                    page.fill(selector, password)
+                    print(f"Password filled using selector: {selector}")
+                    password_filled = True
+                    break
+                except:
+                    continue
+            
+            if not password_filled:
+                print("Could not find password input field")
+                return False
+            
+            # Click Login button - try multiple approaches
+            time.sleep(2)
+            login_clicked = False
+            login_approaches = [
+                lambda: page.locator('text="Log in"').first.click(),
+                lambda: page.locator('[data-testid="LoginForm_Login_Button"]').click(),
+                lambda: page.locator('button:has-text("Log in")').click(),
+                lambda: page.locator('div[role="button"]:has-text("Log in")').click(),
+                lambda: page.locator('span:has-text("Log in")').click()
+            ]
+            
+            for approach in login_approaches:
+                try:
+                    approach()
+                    print("Login button clicked")
+                    login_clicked = True
+                    break
+                except:
+                    continue
+            
+            if not login_clicked:
+                print("Could not click Login button")
+                return False
+            
             print("Login button clicked. Waiting for authentication...")
             
             # Wait for successful login (check for home page elements)
