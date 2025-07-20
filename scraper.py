@@ -17,6 +17,7 @@ import re
 # Use data directory for persistence in Docker
 DATA_DIR = os.getenv("DATA_DIR", ".")
 SESSION_FILE = os.path.join(DATA_DIR, "x_session.json")
+SESSION_FILE_BACKUP = os.path.join(DATA_DIR, "x_session_backup.json")
 TWEETS_FILE = os.path.join(DATA_DIR, "tweets.json")
 LAST_ID_FILE = os.path.join(DATA_DIR, "last_tweet_id.txt")
 MAX_TWEETS_HISTORY = 500  # Maximum number of tweets to keep in tweets.json
@@ -559,18 +560,209 @@ def save_tweet_to_db(tweet_data, conn):
                 pass
         return False, conn
 
-def save_cookies(context):
+def save_cookies(context, session_file=None):
+    """Save cookies to specified file or default session file"""
+    file_path = session_file or SESSION_FILE
     cookies = context.cookies()
-    with open(SESSION_FILE, "w") as f:
+    with open(file_path, "w") as f:
         json.dump(cookies, f)
 
-def load_cookies(context):
-    if os.path.exists(SESSION_FILE):
-        with open(SESSION_FILE, "r") as f:
+def load_cookies(context, session_file=None):
+    """Load cookies from specified file or default session file"""
+    file_path = session_file or SESSION_FILE
+    if os.path.exists(file_path):
+        with open(file_path, "r") as f:
             cookies = json.load(f)
         context.add_cookies(cookies)
         return True
     return False
+
+def auto_login_backup_account(existing_context=None):
+    """Automatically login using backup account credentials"""
+    load_dotenv()
+    email = os.getenv("X_EMAIL_BACKUP")
+    password = os.getenv("X_PASSWORD_BACKUP")
+    
+    if not email or not password:
+        print("X_EMAIL_BACKUP and X_PASSWORD_BACKUP environment variables are required for backup account")
+        return False
+    
+    print("\n=== Automatic X.com Backup Account Login ===")
+    print("Attempting to login with backup account...")
+    
+    try:
+        # Use existing context if provided, otherwise create new one
+        if existing_context:
+            context = existing_context
+            page = context.new_page()
+            should_close_page = True
+            browser = None
+        else:
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(
+                viewport={"width": 1024, "height": 768},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+            should_close_page = True
+        
+        # Clear any existing cookies first
+        if os.path.exists(SESSION_FILE_BACKUP):
+            os.remove(SESSION_FILE_BACKUP)
+            print("Removed existing backup session file.")
+        
+        print("Opening X.com login page for backup account...")
+        
+        try:
+            page.goto("https://x.com/login", timeout=30000)
+            print("Login page loaded. Filling in backup account credentials...")
+            
+            # Wait for and fill email/username field - try multiple selectors
+            email_filled = False
+            email_selectors = [
+                'input[name="text"]',
+                'input[autocomplete="username"]',
+                'input[data-testid="ocfEnterTextTextInput"]',
+                'input[placeholder*="email"]',
+                'input[placeholder*="username"]',
+                'input[type="text"]'
+            ]
+            
+            for selector in email_selectors:
+                try:
+                    page.wait_for_selector(selector, timeout=5000)
+                    page.fill(selector, email)
+                    print(f"Backup email filled using selector: {selector}")
+                    email_filled = True
+                    break
+                except:
+                    continue
+            
+            if not email_filled:
+                print("Could not find email input field for backup account")
+                return False
+            
+            # Click Next button - try multiple approaches
+            time.sleep(2)
+            next_clicked = False
+            next_approaches = [
+                lambda: page.locator('text="Next"').first.click(),
+                lambda: page.locator('[data-testid="LoginForm_Login_Button"]').click(),
+                lambda: page.locator('button:has-text("Next")').click(),
+                lambda: page.locator('div[role="button"]:has-text("Next")').click(),
+                lambda: page.locator('span:has-text("Next")').click()
+            ]
+            
+            for approach in next_approaches:
+                try:
+                    approach()
+                    print("Next button clicked for backup account")
+                    next_clicked = True
+                    break
+                except:
+                    continue
+            
+            if not next_clicked:
+                print("Could not click Next button for backup account")
+                return False
+            
+            time.sleep(3)
+            
+            # Wait for and fill password field - try multiple selectors
+            password_filled = False
+            password_selectors = [
+                'input[name="password"]',
+                'input[type="password"]',
+                'input[autocomplete="current-password"]',
+                'input[data-testid="ocfEnterTextTextInput"]'
+            ]
+            
+            for selector in password_selectors:
+                try:
+                    page.wait_for_selector(selector, timeout=5000)
+                    page.fill(selector, password)
+                    print(f"Backup password filled using selector: {selector}")
+                    password_filled = True
+                    break
+                except:
+                    continue
+            
+            if not password_filled:
+                print("Could not find password input field for backup account")
+                return False
+            
+            # Click Login button - try multiple approaches
+            time.sleep(2)
+            login_clicked = False
+            login_approaches = [
+                lambda: page.locator('text="Log in"').first.click(),
+                lambda: page.locator('[data-testid="LoginForm_Login_Button"]').click(),
+                lambda: page.locator('button:has-text("Log in")').click(),
+                lambda: page.locator('div[role="button"]:has-text("Log in")').click(),
+                lambda: page.locator('span:has-text("Log in")').click()
+            ]
+            
+            for approach in login_approaches:
+                try:
+                    approach()
+                    print("Login button clicked for backup account")
+                    login_clicked = True
+                    break
+                except:
+                    continue
+            
+            if not login_clicked:
+                print("Could not click Login button for backup account")
+                return False
+            
+            print("Backup account login button clicked. Waiting for authentication...")
+            
+            # Wait for successful login (check for home page elements)
+            try:
+                # Wait for navigation to complete and check for login success
+                page.wait_for_url("**/home", timeout=15000)
+                print("Successfully navigated to home page with backup account.")
+                
+                # Additional verification
+                if page.query_selector("[data-testid='SideNav_AccountSwitcher_Button']") or page.query_selector("[data-testid='tweet']"):
+                    print("Backup account login verification successful!")
+                    
+                    # Save cookies to backup session file
+                    save_cookies(context, SESSION_FILE_BACKUP)
+                    print("Backup account session saved successfully!")
+                    return True
+                else:
+                    print("Warning: Could not verify successful backup account login elements.")
+                    save_cookies(context, SESSION_FILE_BACKUP)
+                    return True
+                    
+            except PlaywrightTimeoutError:
+                print("Backup account login may have failed or requires additional verification (2FA, etc.)")
+                # Try to save session anyway in case login was successful but slow
+                save_cookies(context, SESSION_FILE_BACKUP)
+                return False
+                
+        except Exception as page_error:
+            print(f"Error during backup account login process: {page_error}")
+            return False
+        finally:
+            if should_close_page:
+                try:
+                    page.close()
+                except:
+                    pass
+            # Clean up browser and playwright if we created them
+            if browser:
+                try:
+                    browser.close()
+                    pw.stop()
+                except:
+                    pass
+                    
+    except Exception as e:
+        print(f"\nError during backup account auto-login: {e}")
+        return False
 
 def save_last_tweet_id(tweet_id):
     """Save the most recent tweet ID to file"""
@@ -971,209 +1163,43 @@ def trigger_tweet_analysis():
         print(f"Error triggering tweet analysis API: {e}")
         return False
 
-def perform_lightweight_check(list_url, last_tweet_id, limit=3):
-    """
-    A lightweight alternative scraping method that's used during backoff periods.
-    Uses requests + BeautifulSoup to extract tweets without Playwright.
-    """
-    print("Performing lightweight check during backoff period...")
-    newly_found_tweets = []
-    newest_id = last_tweet_id
+def switch_to_backup_account():
+    """Initialize backup account browser and context"""
+    print("\n=== Switching to Backup Account ===")
+    load_dotenv()
+    
+    if not os.getenv("X_EMAIL_BACKUP") or not os.getenv("X_PASSWORD_BACKUP"):
+        print("Backup account credentials not found in environment variables")
+        return None, None, None
     
     try:
-        # More robust user agent
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml,application/json',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://twitter.com/',
-            'X-Twitter-Active-User': 'yes',
-            'X-Twitter-Client-Language': 'en'
-        }
+        pw_backup = sync_playwright().start()
+        browser_backup = pw_backup.chromium.launch(headless=True)
+        context_backup = browser_backup.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         
-        # Get list ID from URL
-        list_id = list_url.split("/")[-1]
-        
-        # Updated GraphQL API endpoint and parameters for the latest Twitter API
-        api_url = "https://twitter.com/i/api/graphql/sLVLhk0bGj3MVFEKTdax1w/ListLatestTweetsTimeline"
-        variables = {
-            "listId": list_id,
-            "count": limit or 20,
-            "includePromotedContent": False,
-            "withSuperFollowsUserFields": True,
-            "withDownvotePerspective": False,
-            "withReactionsMetadata": False,
-            "withReactionsPerspective": False,
-            "withSuperFollowsTweetFields": True,
-            "withClientEventToken": False,
-            "withBirdwatchNotes": False,
-            "withVoice": True,
-            "withV2Timeline": True
-        }
-        
-        # First, try the HTML page to check availability
-        response = requests.get(list_url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            print(f"Lightweight check: Service returned status {response.status_code}")
-            return newly_found_tweets, newest_id
-        
-        print("Lightweight check: Service appears to be available")
-        
-        # Get the session cookies from file
-        cookies = {}
-        if os.path.exists(SESSION_FILE):
-            try:
-                with open(SESSION_FILE, "r") as f:
-                    cookie_data = json.load(f)
-                    for cookie in cookie_data:
-                        cookies[cookie['name']] = cookie['value']
-            except Exception as e:
-                print(f"Error loading cookies for lightweight check: {e}")
-        
-        # Ensure we have the essential cookies
-        if 'auth_token' not in cookies:
-            print("Missing auth_token cookie - API requests will likely fail")
-        
-        # Try multiple API endpoints since Twitter's API structure changes frequently
-        api_endpoints = [
-            # Current primary GraphQL endpoint 
-            {
-                "url": api_url,
-                "params": {
-                    "variables": json.dumps(variables),
-                    "features": json.dumps({
-                        "responsive_web_graphql_exclude_directive_enabled": True,
-                        "verified_phone_label_enabled": False,
-                        "creator_subscriptions_tweet_preview_api_enabled": True,
-                        "responsive_web_graphql_timeline_navigation_enabled": True,
-                        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-                        "tweetypie_unmention_optimization_enabled": True,
-                        "responsive_web_edit_tweet_api_enabled": True,
-                        "graphql_is_translatable_rweb_tweet_is_translatable_enabled": False,
-                        "view_counts_everywhere_api_enabled": True,
-                        "longform_notetweets_consumption_enabled": True,
-                        "responsive_web_twitter_article_tweet_consumption_enabled": False,
-                        "tweet_awards_web_tipping_enabled": False,
-                        "freedom_of_speech_not_reach_fetch_enabled": True,
-                        "standardized_nudges_misinfo": True,
-                        "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
-                        "longform_notetweets_rich_text_read_enabled": True,
-                        "longform_notetweets_inline_media_enabled": True,
-                        "responsive_web_media_download_video_enabled": False,
-                        "responsive_web_enhance_cards_enabled": False
-                    })
-                }
-            },
-            # Backup endpoint that's sometimes used
-            {
-                "url": "https://twitter.com/i/api/graphql/oMVVrI5kt3kOpyHHTTKf5Q/ListLatestTweetsTimeline",
-                "params": {
-                    "variables": json.dumps(variables),
-                    "features": json.dumps({
-                        "responsive_web_graphql_timeline_navigation_enabled": True
-                    })
-                }
-            }
-        ]
-        
-        success = False
-        
-        # Try each API endpoint
-        for endpoint in api_endpoints:
-            if success:
-                break
+        # Try to load existing backup session first
+        if load_cookies(context_backup, SESSION_FILE_BACKUP):
+            print("Loaded existing backup account session")
+            return pw_backup, browser_backup, context_backup
+        else:
+            print("No existing backup session found, attempting login...")
+            if auto_login_backup_account(context_backup):
+                print("Backup account login successful!")
+                return pw_backup, browser_backup, context_backup
+            else:
+                print("Backup account login failed")
+                browser_backup.close()
+                pw_backup.stop()
+                return None, None, None
                 
-            try:
-                print(f"Trying API endpoint: {endpoint['url'].split('/')[-2]}")
-                api_response = requests.get(
-                    endpoint["url"],
-                    headers=headers,
-                    cookies=cookies,
-                    params=endpoint["params"],
-                    timeout=15
-                )
-                
-                if api_response.status_code == 200:
-                    data = api_response.json()
-                    
-                    # Debug the first part of the response to see structure
-                    response_summary = str(data)[:200] + "..." if len(str(data)) > 200 else str(data)
-                    print(f"API response received: {response_summary}")
-                    
-                    # Extract tweets from response - support multiple possible response structures
-                    instructions = None
-                    
-                    # Try structure 1: data > list > tweets_timeline > timeline > instructions
-                    if not instructions and "data" in data and "list" in data["data"]:
-                        instructions = (
-                            data.get("data", {})
-                            .get("list", {})
-                            .get("tweets_timeline", {})
-                            .get("timeline", {})
-                            .get("instructions", [])
-                        )
-                    
-                    # Try structure 2: data > list_latest_tweets_timeline > timeline > instructions
-                    if not instructions and "data" in data and "list_latest_tweets_timeline" in data["data"]:
-                        instructions = (
-                            data.get("data", {})
-                            .get("list_latest_tweets_timeline", {})
-                            .get("timeline", {})
-                            .get("instructions", [])
-                        )
-                    
-                    # Try structure 3: data > user > result > timeline > timeline > instructions
-                    if not instructions and "data" in data and "user" in data["data"]:
-                        instructions = (
-                            data.get("data", {})
-                            .get("user", {})
-                            .get("result", {})
-                            .get("timeline", {})
-                            .get("timeline", {})
-                            .get("instructions", [])
-                        )
-                    
-                    if instructions:
-                        for instr in instructions:
-                            if "entries" in instr:
-                                for entry in instr["entries"]:
-                                    if entry.get("entryId", "").startswith("tweet-"):
-                                        try:
-                                            content_items = entry.get("content", {}).get("itemContent", {})
-                                            if "tweet_results" in content_items:
-                                                tweet_content = content_items["tweet_results"]["result"]
-                                                tweet_id = tweet_content.get("rest_id")
-                                                
-                                                if tweet_id and (last_tweet_id is None or int(tweet_id) > int(last_tweet_id)):
-                                                    extracted_tweet = extract_tweet_metadata(tweet_content)
-                                                    if extracted_tweet:
-                                                        newly_found_tweets.append(extracted_tweet)
-                                                        
-                                                        if newest_id is None or int(tweet_id) > int(newest_id):
-                                                            newest_id = tweet_id
-                                        except (KeyError, TypeError) as e:
-                                            # Silently handle missing keys in response structure
-                                            pass
-                        
-                        success = True
-                        if newly_found_tweets:
-                            print(f"Lightweight check found {len(newly_found_tweets)} new tweets!")
-                            
-                            # Print username info for debugging
-                            for tweet in newly_found_tweets:
-                                username = tweet.get("user", {}).get("username", "Unknown")
-                                print(f"Found tweet from user: {username}")
-                    else:
-                        print("Could not find instructions in API response")
-                
-            except Exception as e:
-                print(f"Error in API endpoint {endpoint['url']}: {e}")
-        
     except Exception as e:
-        print(f"Lightweight check failed: {e}")
-    
-    return newly_found_tweets, newest_id
+        print(f"Error switching to backup account: {e}")
+        return None, None, None
+
+
 
 def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_time=1, headless=True, limit=None, max_consecutive_errors=5, max_history=MAX_TWEETS_HISTORY):
     """Monitor Twitter list for new tweets with rate limiting protection."""
@@ -1205,15 +1231,23 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
     context_monitor = None
     
     # Initialize browser before main loop
-    pw_runtime, browser_monitor, context_monitor = initialize_browser(headless)
+    pw_runtime, browser_monitor, context_monitor = initialize_browser(headless, "primary")
+    
+    # Initialize backup browser components (will be created when needed)
+    pw_runtime_backup = None
+    browser_monitor_backup = None
+    context_monitor_backup = None
     
     session_available = False
+    backup_session_available = False
+    using_backup_account = False
+    
     try:
         if load_cookies(context_monitor):
             session_available = True
-            print("Valid session found. Using full browser-based monitoring.")
+            print("Valid primary session found. Using full browser-based monitoring.")
         else:
-            print("No valid session found. Attempting automatic login...")
+            print("No valid primary session found. Attempting automatic login...")
             # Try automatic login using existing context
             if auto_login(context_monitor):
                 print("Automatic login successful! Reloading session...")
@@ -1227,6 +1261,13 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             else:
                 print("Automatic login failed. Continuing with lightweight checks only.")
                 print("Note: You can run with --login to enable manual login.")
+        
+        # Check if backup account credentials are available
+        load_dotenv()
+        if os.getenv("X_EMAIL_BACKUP") and os.getenv("X_PASSWORD_BACKUP"):
+            print("Backup account credentials detected. Will use for rate limit mitigation.")
+        else:
+            print("No backup account credentials found. Add X_EMAIL_BACKUP and X_PASSWORD_BACKUP to .env for better rate limit handling.")
         
         print(f"Starting real-time monitoring of {list_url}")
         print(f"Checking for new tweets every {interval} seconds")
@@ -1258,15 +1299,35 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     current_wait_time = base_wait_time
                     print(f"Successful browser request. Resuming normal interval of {current_wait_time} seconds.")
                 else:
-                    # No session available, use lightweight check immediately
-                    print("No browser session - using lightweight check...")
-                    newly_scraped_tweets, newest_id_from_scrape = perform_lightweight_check(list_url, last_tweet_id, limit)
-                    if newly_scraped_tweets:
-                        consecutive_error_count = 0
-                        current_wait_time = base_wait_time
-                        print(f"Successful lightweight request. Found {len(newly_scraped_tweets)} tweets.")
+                    # No session available, try to switch to backup account
+                    print("No primary session available. Attempting to switch to backup account...")
+                    pw_runtime_backup, browser_monitor_backup, context_monitor_backup = switch_to_backup_account()
+                    
+                    if pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
+                        print("Successfully switched to backup account!")
+                        using_backup_account = True
+                        
+                        # Try scraping with backup account
+                        newly_scraped_tweets, newest_id_from_scrape = scrape_list(
+                            list_url, 
+                            max_scrolls=max_scrolls, 
+                            wait_time=wait_time,
+                            browser_param=browser_monitor_backup,
+                            context_param=context_monitor_backup,
+                            last_tweet_id=last_tweet_id,
+                            limit=limit
+                        )
+                        
+                        if newly_scraped_tweets:
+                            consecutive_error_count = 0
+                            current_wait_time = base_wait_time
+                            print(f"Successful backup account request. Found {len(newly_scraped_tweets)} tweets.")
+                        else:
+                            print("No tweets found with backup account.")
                     else:
-                        print("No tweets found via lightweight check.")
+                        print("Failed to switch to backup account. No tweets will be scraped this cycle.")
+                        newly_scraped_tweets = []
+                        newest_id_from_scrape = None
             
                 if newest_id_from_scrape and (last_tweet_id is None or int(newest_id_from_scrape) > int(last_tweet_id)):
                     last_tweet_id = newest_id_from_scrape
@@ -1360,76 +1421,12 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                 else:
                     print(f"Consecutive errors: {consecutive_error_count}/{max_consecutive_errors}. Will wait {current_wait_time} seconds.")
             
-            # This block calculates wait time and performs sleeps/lightweight checks.
-            # It is OUTSIDE the try/except for the scraping cycle, but INSIDE the while True loop.
+            # Calculate wait time and sleep
             elapsed_cycle = time.time() - start_time_cycle
             actual_wait_time = max(1, current_wait_time - elapsed_cycle)
             
-            lightweight_tweets_found_in_cycle = False # Flag to track if lightweight check found anything
-            if actual_wait_time > 30:
-                print(f"Long backoff period detected ({int(actual_wait_time)} seconds). Will perform lightweight checks during wait...")
-                remaining_wait = actual_wait_time
-                check_interval = min(30, actual_wait_time / 3 if actual_wait_time > 0 else 30) 
-                
-                while remaining_wait > 0:
-                    wait_chunk = min(check_interval, remaining_wait)
-                    print(f"Waiting {int(wait_chunk)} seconds before lightweight check...")
-                    time.sleep(wait_chunk)
-                    remaining_wait -= wait_chunk
-                    if remaining_wait <= 0: break
-                        
-                    lightweight_tweets, lightweight_newest_id = perform_lightweight_check(list_url, last_tweet_id, limit=3)
-                    if lightweight_tweets:
-                        lightweight_tweets_found_in_cycle = True
-                        print(f"Lightweight check found {len(lightweight_tweets)} new tweets during backoff!")
-                        if lightweight_newest_id and (last_tweet_id is None or int(lightweight_newest_id) > int(last_tweet_id)):
-                            last_tweet_id = lightweight_newest_id
-                            save_last_tweet_id(last_tweet_id)
-                            print(f"Updated last tweet ID to {last_tweet_id} from lightweight check")
-                        
-                        existing_ids_json = {tweet["id"] for tweet in all_tweets_ever_saved_json}
-                        unique_new_tweets = [tweet for tweet in lightweight_tweets if tweet["id"] not in existing_ids_json]
-                        if unique_new_tweets:
-                            all_tweets_ever_saved_json = unique_new_tweets + all_tweets_ever_saved_json
-                            all_tweets_ever_saved_json.sort(key=lambda x: int(x.get("id", 0)), reverse=True)
-                            
-                            # Trim history if needed
-                            if len(all_tweets_ever_saved_json) > max_history:
-                                all_tweets_ever_saved_json = all_tweets_ever_saved_json[:max_history]
-                                print(f"Trimmed tweets history to {max_history} most recent tweets during lightweight check.")
-                                
-                            output_data_json = {
-                                "tweets": all_tweets_ever_saved_json,
-                                "meta": {
-                                    "scraped_at": datetime.datetime.now().isoformat(),
-                                    "list_url": list_url,
-                                    "tweet_count": len(all_tweets_ever_saved_json),
-                                    "lightweight_mode": True
-                                }
-                            }
-                            with open(TWEETS_FILE, "w") as f_json: json.dump(output_data_json, f_json, indent=2)
-                            saved_to_db_count = 0
-                            if db_conn:
-                                print(f"Saving {len(unique_new_tweets)} tweets from lightweight check to DB...")
-                                for tweet_data in unique_new_tweets:
-                                    success, db_conn = save_tweet_to_db(tweet_data, db_conn)
-                                    if success: saved_to_db_count += 1
-                                print(f"Successfully saved {saved_to_db_count} tweets from lightweight check to database.")
-                                if saved_to_db_count > 0:
-                                    print("Triggering tweet analysis API from lightweight check...")
-                                    trigger_tweet_analysis()
-                            for tweet in unique_new_tweets:
-                                username = tweet.get("user", {}).get("username", "Unknown")
-                                text = tweet.get("text", "").replace("\n", " ")
-                                print(f"[LIGHTWEIGHT] @{username}: {text[:70]}{'...' if len(text) > 70 else ''}")
-                
-                if lightweight_tweets_found_in_cycle:
-                    consecutive_error_count = max(0, consecutive_error_count - 1)
-                    current_wait_time = max(base_wait_time, current_wait_time / 2)
-                    print(f"Lightweight check successful, reducing error count to {consecutive_error_count} and backoff to {int(current_wait_time)}s")
-            else:
-                print(f"Waiting {int(actual_wait_time)} seconds before next check...")
-                time.sleep(actual_wait_time)
+            print(f"Waiting {int(actual_wait_time)} seconds before next check...")
+            time.sleep(actual_wait_time)
             
     except KeyboardInterrupt:
         print("\nMonitoring stopped by user. Cleaning up resources...")
@@ -1463,11 +1460,28 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             except Exception as e_stop_pw_mon:
                 print(f"Non-fatal error stopping Playwright: {e_stop_pw_mon}")
         
+        # Clean up backup browser resources if they exist
+        if browser_monitor_backup:
+            try:
+                print("Shutting down backup browser...")
+                browser_monitor_backup.close()
+                print("Backup browser closed.")
+            except Exception as e_close_backup:
+                print(f"Non-fatal error closing backup browser: {e_close_backup}")
+        
+        if pw_runtime_backup:
+            try:
+                print("Stopping backup Playwright...")
+                pw_runtime_backup.stop()
+                print("Backup Playwright stopped.")
+            except Exception as e_stop_backup:
+                print(f"Non-fatal error stopping backup Playwright: {e_stop_backup}")
+        
         print("Monitoring ended.")
 
-def initialize_browser(headless=True):
+def initialize_browser(headless=True, account_suffix=""):
     """Initialize a browser with a random user agent and return the components."""
-    print("Initializing Playwright and browser...")
+    print(f"Initializing Playwright and browser{' for ' + account_suffix if account_suffix else ''}...")
     pw_runtime = sync_playwright().start()
     
     # Create browser with custom user agent to reduce detection
@@ -1504,7 +1518,7 @@ def initialize_browser(headless=True):
         });
     """)
     
-    print(f"Browser initialized with user agent: {selected_user_agent}")
+    print(f"Browser initialized{' for ' + account_suffix if account_suffix else ''} with user agent: {selected_user_agent}")
     return pw_runtime, browser, context
 
 if __name__ == "__main__":
@@ -1528,6 +1542,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-errors", type=int, default=5, help="Max consecutive errors before stopping monitor")
     parser.add_argument("--max-history", type=int, default=MAX_TWEETS_HISTORY,
                        help=f"Maximum number of tweets to keep in history (default: {MAX_TWEETS_HISTORY})")
+    parser.add_argument("--use-backup", action="store_true",
+                       help="Enable backup account for rate limit mitigation (requires X_EMAIL_BACKUP and X_PASSWORD_BACKUP in .env)")
     
     args = parser.parse_args()
     
