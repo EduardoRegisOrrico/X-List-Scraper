@@ -1026,7 +1026,7 @@ def _process_xhr_calls(xhr_calls, last_tweet_id, limit, seen_ids, current_tweets
             print(f"Error parsing XHR JSON: {e}")
     return newly_found_tweets_this_batch, newest_id_this_batch, False # Limit not reached
 
-def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, context_param=None, last_tweet_id=None, limit=None):
+def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, context_param=None, last_tweet_id=None, limit=None, is_backup_account=False):
     _xhr_calls_buffer = [] 
     all_new_tweets_metadata = []
     overall_newest_id = last_tweet_id
@@ -1164,7 +1164,7 @@ def trigger_tweet_analysis():
         return False
 
 def switch_to_backup_account(pw_runtime):
-    """Initialize backup account browser and context using existing playwright runtime"""
+    """Initialize backup account browser and context using existing playwright runtime with different fingerprint"""
     load_dotenv()
     backup_email = os.getenv("X_EMAIL_BACKUP")
     backup_password = os.getenv("X_PASSWORD_BACKUP")
@@ -1176,12 +1176,94 @@ def switch_to_backup_account(pw_runtime):
         return None, None
     
     try:
-        print("🔄 BACKUP ACCOUNT: Creating new browser context...")
-        browser_backup = pw_runtime.chromium.launch(headless=True)
-        context_backup = browser_backup.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        print("🔄 BACKUP ACCOUNT: Creating new browser with different fingerprint...")
+        
+        # Different browser args for backup account
+        browser_backup = pw_runtime.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--user-data-dir=/tmp/backup-x-profile',  # Different profile directory
+                '--disable-extensions',
+                '--disable-plugins',
+                '--disable-images',  # Faster loading, different fingerprint
+                '--disable-javascript-harmony-shipping',
+                '--memory-pressure-off',
+                '--max_old_space_size=4096'
+            ]
         )
+        
+        # Completely different browser fingerprint
+        backup_user_agents = [
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+            "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0"
+        ]
+        
+        # Select different user agent from backup pool
+        backup_user_agent = backup_user_agents[int(time.time()) % len(backup_user_agents)]
+        
+        context_backup = browser_backup.new_context(
+            viewport={"width": 1366, "height": 768},  # Different viewport size
+            user_agent=backup_user_agent,
+            locale='en-GB',  # Different locale
+            timezone_id='Europe/London',  # Different timezone
+            color_scheme='dark',  # Different color scheme
+            reduced_motion='reduce',  # Different motion preference
+            forced_colors='none',
+            extra_http_headers={
+                'Accept-Language': 'en-GB,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1'
+            }
+        )
+        
+        # Add different browser fingerprint script
+        context_backup.add_init_script("""
+            // Different fingerprint for backup account
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+            });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5, 6, 7],  // Different plugin count
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-GB', 'en'],  // Different language preference
+            });
+            Object.defineProperty(navigator, 'platform', {
+                get: () => 'MacIntel',  // Different platform
+            });
+            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                get: () => 8,  // Different CPU core count
+            });
+            Object.defineProperty(screen, 'width', {
+                get: () => 1366,
+            });
+            Object.defineProperty(screen, 'height', {
+                get: () => 768,
+            });
+            Object.defineProperty(screen, 'availWidth', {
+                get: () => 1366,
+            });
+            Object.defineProperty(screen, 'availHeight', {
+                get: () => 728,
+            });
+        """)
+        
+        print(f"🔧 BACKUP FINGERPRINT: Using {backup_user_agent[:50]}...")
+        print(f"🔧 BACKUP FINGERPRINT: Viewport 1366x768, Locale en-GB, Timezone Europe/London")
+        
+        # Add random delay to make requests less predictable
+        initial_delay = random.uniform(3, 8)
+        print(f"🔧 BACKUP TIMING: Adding {initial_delay:.1f}s initial delay for natural behavior")
+        time.sleep(initial_delay)
         
         # Try to load existing backup session first
         print(f"🔍 BACKUP ACCOUNT: Checking for existing session ({backup_email})")
@@ -1319,16 +1401,22 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     current_wait_time = base_wait_time
                     print(f"✅ PRIMARY ACCOUNT: Successful request. Resuming normal interval of {current_wait_time} seconds.")
                 elif using_backup_account and browser_monitor_backup and context_monitor_backup:
-                    # Continue using backup account
+                    # Continue using backup account with different timing
                     print(f"🔄 SCRAPING: Using BACKUP account ({backup_email})")
+                    
+                    # Use different timing patterns for backup account
+                    backup_max_scrolls = max(1, max_scrolls - 1)  # Fewer scrolls
+                    backup_wait_time = wait_time * random.uniform(1.5, 2.5)  # Longer waits
+                    
                     newly_scraped_tweets, newest_id_from_scrape = scrape_list(
                         list_url, 
-                        max_scrolls=max_scrolls, 
-                        wait_time=wait_time,
+                        max_scrolls=backup_max_scrolls, 
+                        wait_time=backup_wait_time,
                         browser_param=browser_monitor_backup,
                         context_param=context_monitor_backup,
                         last_tweet_id=last_tweet_id,
-                        limit=limit
+                        limit=limit,
+                        is_backup_account=True
                     )
                     
                     if newly_scraped_tweets:
@@ -1347,16 +1435,22 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                         print(f"✅ BACKUP ACCOUNT: Successfully switched to {backup_email}")
                         using_backup_account = True
                         
-                        # Try scraping with backup account
+                        # Try scraping with backup account using different timing
                         print(f"🔄 SCRAPING: Using BACKUP account ({backup_email})")
+                        
+                        # Use different timing patterns for backup account
+                        backup_max_scrolls = max(1, max_scrolls - 1)  # Fewer scrolls
+                        backup_wait_time = wait_time * random.uniform(1.5, 2.5)  # Longer waits
+                        
                         newly_scraped_tweets, newest_id_from_scrape = scrape_list(
                             list_url, 
-                            max_scrolls=max_scrolls, 
-                            wait_time=wait_time,
+                            max_scrolls=backup_max_scrolls, 
+                            wait_time=backup_wait_time,
                             browser_param=browser_monitor_backup,
                             context_param=context_monitor_backup,
                             last_tweet_id=last_tweet_id,
-                            limit=limit
+                            limit=limit,
+                            is_backup_account=True
                         )
                         
                         if newly_scraped_tweets:
