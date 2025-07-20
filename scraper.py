@@ -1163,8 +1163,8 @@ def trigger_tweet_analysis():
         print(f"Error triggering tweet analysis API: {e}")
         return False
 
-def switch_to_backup_account():
-    """Initialize backup account browser and context"""
+def switch_to_backup_account(pw_runtime):
+    """Initialize backup account browser and context using existing playwright runtime"""
     load_dotenv()
     backup_email = os.getenv("X_EMAIL_BACKUP")
     backup_password = os.getenv("X_PASSWORD_BACKUP")
@@ -1173,12 +1173,11 @@ def switch_to_backup_account():
     
     if not backup_email or not backup_password:
         print("❌ BACKUP ACCOUNT: Credentials not found in environment variables")
-        return None, None, None
+        return None, None
     
     try:
-        print("🔄 BACKUP ACCOUNT: Starting browser...")
-        pw_backup = sync_playwright().start()
-        browser_backup = pw_backup.chromium.launch(headless=True)
+        print("🔄 BACKUP ACCOUNT: Creating new browser context...")
+        browser_backup = pw_runtime.chromium.launch(headless=True)
         context_backup = browser_backup.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -1188,22 +1187,21 @@ def switch_to_backup_account():
         print(f"🔍 BACKUP ACCOUNT: Checking for existing session ({backup_email})")
         if load_cookies(context_backup, SESSION_FILE_BACKUP):
             print(f"✅ BACKUP ACCOUNT: Loaded existing session for {backup_email}")
-            return pw_backup, browser_backup, context_backup
+            return browser_backup, context_backup
         else:
             print(f"❌ BACKUP ACCOUNT: No existing session found for {backup_email}")
             print(f"🔄 BACKUP ACCOUNT: Attempting automatic login for {backup_email}...")
             if auto_login_backup_account(context_backup):
                 print(f"✅ BACKUP ACCOUNT: Login successful for {backup_email}")
-                return pw_backup, browser_backup, context_backup
+                return browser_backup, context_backup
             else:
                 print(f"❌ BACKUP ACCOUNT: Login failed for {backup_email}")
                 browser_backup.close()
-                pw_backup.stop()
-                return None, None, None
+                return None, None
                 
     except Exception as e:
         print(f"❌ BACKUP ACCOUNT: Error during switch - {e}")
-        return None, None, None
+        return None, None
 
 
 
@@ -1240,7 +1238,6 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
     pw_runtime, browser_monitor, context_monitor = initialize_browser(headless, "primary")
     
     # Initialize backup browser components (will be created when needed)
-    pw_runtime_backup = None
     browser_monitor_backup = None
     context_monitor_backup = None
     
@@ -1321,7 +1318,7 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     consecutive_error_count = 0
                     current_wait_time = base_wait_time
                     print(f"✅ PRIMARY ACCOUNT: Successful request. Resuming normal interval of {current_wait_time} seconds.")
-                elif using_backup_account and pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
+                elif using_backup_account and browser_monitor_backup and context_monitor_backup:
                     # Continue using backup account
                     print(f"🔄 SCRAPING: Using BACKUP account ({backup_email})")
                     newly_scraped_tweets, newest_id_from_scrape = scrape_list(
@@ -1344,9 +1341,9 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     # No session available, try to switch to backup account
                     print(f"❌ PRIMARY ACCOUNT: No session available for {primary_email}")
                     print(f"🔄 SWITCHING: Attempting to switch to backup account ({backup_email})...")
-                    pw_runtime_backup, browser_monitor_backup, context_monitor_backup = switch_to_backup_account()
+                    browser_monitor_backup, context_monitor_backup = switch_to_backup_account(pw_runtime)
                     
-                    if pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
+                    if browser_monitor_backup and context_monitor_backup:
                         print(f"✅ BACKUP ACCOUNT: Successfully switched to {backup_email}")
                         using_backup_account = True
                         
@@ -1449,8 +1446,8 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                         
                         # Try to switch to backup account
                         if backup_email:
-                            pw_runtime_backup, browser_monitor_backup, context_monitor_backup = switch_to_backup_account()
-                            if pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
+                            browser_monitor_backup, context_monitor_backup = switch_to_backup_account(pw_runtime)
+                            if browser_monitor_backup and context_monitor_backup:
                                 using_backup_account = True
                                 consecutive_error_count = 0  # Reset error count for backup account
                                 current_wait_time = base_wait_time
@@ -1464,13 +1461,12 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                         print("🔄 Reinitializing backup browser...")
                         try:
                             if browser_monitor_backup: browser_monitor_backup.close()
-                            if pw_runtime_backup: pw_runtime_backup.stop()
                         except Exception as e_cleanup: 
                             print(f"Error during backup browser cleanup: {e_cleanup}")
                         
                         time.sleep(5)
-                        pw_runtime_backup, browser_monitor_backup, context_monitor_backup = switch_to_backup_account()
-                        if pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
+                        browser_monitor_backup, context_monitor_backup = switch_to_backup_account(pw_runtime)
+                        if browser_monitor_backup and context_monitor_backup:
                             print(f"✅ BACKUP RESET: Successfully reinitialized backup account ({backup_email})")
                         else:
                             print(f"❌ BACKUP RESET: Failed to reinitialize backup account ({backup_email})")
