@@ -1165,14 +1165,18 @@ def trigger_tweet_analysis():
 
 def switch_to_backup_account():
     """Initialize backup account browser and context"""
-    print("\n=== Switching to Backup Account ===")
     load_dotenv()
+    backup_email = os.getenv("X_EMAIL_BACKUP")
+    backup_password = os.getenv("X_PASSWORD_BACKUP")
     
-    if not os.getenv("X_EMAIL_BACKUP") or not os.getenv("X_PASSWORD_BACKUP"):
-        print("Backup account credentials not found in environment variables")
+    print(f"\n🔄 ACCOUNT SWITCH: Initializing backup account ({backup_email})")
+    
+    if not backup_email or not backup_password:
+        print("❌ BACKUP ACCOUNT: Credentials not found in environment variables")
         return None, None, None
     
     try:
+        print("🔄 BACKUP ACCOUNT: Starting browser...")
         pw_backup = sync_playwright().start()
         browser_backup = pw_backup.chromium.launch(headless=True)
         context_backup = browser_backup.new_context(
@@ -1181,22 +1185,24 @@ def switch_to_backup_account():
         )
         
         # Try to load existing backup session first
+        print(f"🔍 BACKUP ACCOUNT: Checking for existing session ({backup_email})")
         if load_cookies(context_backup, SESSION_FILE_BACKUP):
-            print("Loaded existing backup account session")
+            print(f"✅ BACKUP ACCOUNT: Loaded existing session for {backup_email}")
             return pw_backup, browser_backup, context_backup
         else:
-            print("No existing backup session found, attempting login...")
+            print(f"❌ BACKUP ACCOUNT: No existing session found for {backup_email}")
+            print(f"🔄 BACKUP ACCOUNT: Attempting automatic login for {backup_email}...")
             if auto_login_backup_account(context_backup):
-                print("Backup account login successful!")
+                print(f"✅ BACKUP ACCOUNT: Login successful for {backup_email}")
                 return pw_backup, browser_backup, context_backup
             else:
-                print("Backup account login failed")
+                print(f"❌ BACKUP ACCOUNT: Login failed for {backup_email}")
                 browser_backup.close()
                 pw_backup.stop()
                 return None, None, None
                 
     except Exception as e:
-        print(f"Error switching to backup account: {e}")
+        print(f"❌ BACKUP ACCOUNT: Error during switch - {e}")
         return None, None, None
 
 
@@ -1243,31 +1249,47 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
     using_backup_account = False
     
     try:
+        # Load environment variables to check account info
+        load_dotenv()
+        primary_email = os.getenv("X_EMAIL")
+        backup_email = os.getenv("X_EMAIL_BACKUP")
+        
+        print(f"\n=== Account Configuration ===")
+        print(f"Primary account: {primary_email if primary_email else 'Not configured'}")
+        print(f"Backup account:  {backup_email if backup_email else 'Not configured'}")
+        print("=" * 30)
+        
         if load_cookies(context_monitor):
             session_available = True
-            print("Valid primary session found. Using full browser-based monitoring.")
+            print(f"✅ PRIMARY ACCOUNT SESSION: Valid session found for {primary_email}")
+            print("🔄 Using PRIMARY account for monitoring")
         else:
-            print("No valid primary session found. Attempting automatic login...")
+            print(f"❌ PRIMARY ACCOUNT SESSION: No valid session found for {primary_email}")
+            print("🔄 Attempting automatic login for PRIMARY account...")
             # Try automatic login using existing context
             if auto_login(context_monitor):
-                print("Automatic login successful! Reloading session...")
+                print("✅ PRIMARY ACCOUNT LOGIN: Automatic login successful!")
                 # Reload cookies after successful auto-login
                 if load_cookies(context_monitor):
                     session_available = True
-                    print("Session loaded successfully. Using full browser-based monitoring.")
+                    print("✅ PRIMARY ACCOUNT SESSION: Session loaded successfully")
+                    print("🔄 Using PRIMARY account for monitoring")
                 else:
-                    print("Warning: Auto-login succeeded but session reload failed.")
-                    print("Continuing with lightweight checks only.")
+                    print("⚠️  PRIMARY ACCOUNT WARNING: Auto-login succeeded but session reload failed")
+                    session_available = False
             else:
-                print("Automatic login failed. Continuing with lightweight checks only.")
-                print("Note: You can run with --login to enable manual login.")
+                print("❌ PRIMARY ACCOUNT LOGIN: Automatic login failed")
+                session_available = False
         
         # Check if backup account credentials are available
-        load_dotenv()
-        if os.getenv("X_EMAIL_BACKUP") and os.getenv("X_PASSWORD_BACKUP"):
-            print("Backup account credentials detected. Will use for rate limit mitigation.")
+        if backup_email:
+            print(f"✅ BACKUP ACCOUNT: Credentials detected for {backup_email}")
+            print("🔄 Backup account will be used for rate limit mitigation")
         else:
-            print("No backup account credentials found. Add X_EMAIL_BACKUP and X_PASSWORD_BACKUP to .env for better rate limit handling.")
+            print("❌ BACKUP ACCOUNT: No credentials found")
+            print("💡 Add X_EMAIL_BACKUP and X_PASSWORD_BACKUP to .env for better rate limit handling")
+        
+        print("=" * 50)
         
         print(f"Starting real-time monitoring of {list_url}")
         print(f"Checking for new tweets every {interval} seconds")
@@ -1284,8 +1306,9 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                 newly_scraped_tweets = []
                 newest_id_from_scrape = None
                 
-                if session_available:
-                    # Try browser-based scraping first
+                if session_available and not using_backup_account:
+                    # Try browser-based scraping with primary account
+                    print(f"🔄 SCRAPING: Using PRIMARY account ({primary_email})")
                     newly_scraped_tweets, newest_id_from_scrape = scrape_list(
                         list_url, 
                         max_scrolls=max_scrolls, 
@@ -1297,17 +1320,38 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     )
                     consecutive_error_count = 0
                     current_wait_time = base_wait_time
-                    print(f"Successful browser request. Resuming normal interval of {current_wait_time} seconds.")
+                    print(f"✅ PRIMARY ACCOUNT: Successful request. Resuming normal interval of {current_wait_time} seconds.")
+                elif using_backup_account and pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
+                    # Continue using backup account
+                    print(f"🔄 SCRAPING: Using BACKUP account ({backup_email})")
+                    newly_scraped_tweets, newest_id_from_scrape = scrape_list(
+                        list_url, 
+                        max_scrolls=max_scrolls, 
+                        wait_time=wait_time,
+                        browser_param=browser_monitor_backup,
+                        context_param=context_monitor_backup,
+                        last_tweet_id=last_tweet_id,
+                        limit=limit
+                    )
+                    
+                    if newly_scraped_tweets:
+                        consecutive_error_count = 0
+                        current_wait_time = base_wait_time
+                        print(f"✅ BACKUP ACCOUNT: Successful request. Found {len(newly_scraped_tweets)} tweets.")
+                    else:
+                        print("⚠️  BACKUP ACCOUNT: No tweets found.")
                 else:
                     # No session available, try to switch to backup account
-                    print("No primary session available. Attempting to switch to backup account...")
+                    print(f"❌ PRIMARY ACCOUNT: No session available for {primary_email}")
+                    print(f"🔄 SWITCHING: Attempting to switch to backup account ({backup_email})...")
                     pw_runtime_backup, browser_monitor_backup, context_monitor_backup = switch_to_backup_account()
                     
                     if pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
-                        print("Successfully switched to backup account!")
+                        print(f"✅ BACKUP ACCOUNT: Successfully switched to {backup_email}")
                         using_backup_account = True
                         
                         # Try scraping with backup account
+                        print(f"🔄 SCRAPING: Using BACKUP account ({backup_email})")
                         newly_scraped_tweets, newest_id_from_scrape = scrape_list(
                             list_url, 
                             max_scrolls=max_scrolls, 
@@ -1321,11 +1365,12 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                         if newly_scraped_tweets:
                             consecutive_error_count = 0
                             current_wait_time = base_wait_time
-                            print(f"Successful backup account request. Found {len(newly_scraped_tweets)} tweets.")
+                            print(f"✅ BACKUP ACCOUNT: Successful request. Found {len(newly_scraped_tweets)} tweets.")
                         else:
-                            print("No tweets found with backup account.")
+                            print("⚠️  BACKUP ACCOUNT: No tweets found.")
                     else:
-                        print("Failed to switch to backup account. No tweets will be scraped this cycle.")
+                        print(f"❌ BACKUP ACCOUNT: Failed to switch to {backup_email}")
+                        print("🚫 NO ACCOUNTS AVAILABLE: No tweets will be scraped this cycle.")
                         newly_scraped_tweets = []
                         newest_id_from_scrape = None
             
@@ -1382,34 +1427,62 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     print("No new tweets found this cycle.")
 
             except PageLoadError as ple:
-                if session_available:
-                    print(f"Page load/scrape error during cycle: {ple}")
-                    consecutive_error_count += 1
-                    current_wait_time = min(1800, base_wait_time * (2 ** consecutive_error_count))
-                    print(f"Possible rate limiting detected. Implementing backoff: {current_wait_time} seconds.")
-                    if consecutive_error_count >= 3:
-                        print("Multiple consecutive errors. Reinitializing browser...")
-                        try:
-                            if browser_monitor: browser_monitor.close()
-                            if pw_runtime: pw_runtime.stop()
-                        except Exception as e_cleanup: print(f"Error during browser cleanup: {e_cleanup}")
-                        time.sleep(5)
-                        pw_runtime, browser_monitor, context_monitor = initialize_browser(headless)
-                        if load_cookies(context_monitor):
-                            session_available = True
-                            print("Browser reinitialized with fresh session.")
-                        else:
-                            session_available = False
-                            print("Browser reinitialized but no valid session - continuing with lightweight checks only.")
-                    if consecutive_error_count >= max_consecutive_errors:
-                        print(f"Reached maximum consecutive errors ({max_consecutive_errors}). This is NOT fatal - will continue after backoff period.")
-                        print(f"Backing off for {current_wait_time} seconds before trying again...")
-                    else:
-                        print(f"Consecutive errors: {consecutive_error_count}/{max_consecutive_errors}. Backing off for {current_wait_time} seconds.")
+                current_account = "PRIMARY" if not using_backup_account else "BACKUP"
+                current_email = primary_email if not using_backup_account else backup_email
+                
+                print(f"🚫 {current_account} ACCOUNT ERROR: Page load/scrape error for {current_email}")
+                print(f"   Error details: {ple}")
+                consecutive_error_count += 1
+                current_wait_time = min(1800, base_wait_time * (2 ** consecutive_error_count))
+                
+                if "timeout" in str(ple).lower() or "wait_for_selector" in str(ple).lower():
+                    print(f"⏰ RATE LIMIT DETECTED: {current_account} account ({current_email}) appears to be rate limited")
+                    print(f"🔄 BACKOFF STRATEGY: Implementing exponential backoff: {current_wait_time} seconds")
                 else:
-                    # This shouldn't happen in lightweight mode, but handle it gracefully
-                    print(f"Unexpected PageLoadError in lightweight mode: {ple}")
-                    consecutive_error_count += 1
+                    print(f"🚫 {current_account} ACCOUNT: Generic page load error")
+                    print(f"🔄 BACKOFF STRATEGY: Implementing backoff: {current_wait_time} seconds")
+                
+                if consecutive_error_count >= 3:
+                    if not using_backup_account:
+                        print(f"🔄 SWITCHING STRATEGY: Multiple errors with PRIMARY account ({primary_email})")
+                        print("🔄 Attempting to switch to backup account...")
+                        
+                        # Try to switch to backup account
+                        if backup_email:
+                            pw_runtime_backup, browser_monitor_backup, context_monitor_backup = switch_to_backup_account()
+                            if pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
+                                using_backup_account = True
+                                consecutive_error_count = 0  # Reset error count for backup account
+                                current_wait_time = base_wait_time
+                                print(f"✅ ACCOUNT SWITCH: Successfully switched to backup account ({backup_email})")
+                            else:
+                                print(f"❌ ACCOUNT SWITCH: Failed to switch to backup account ({backup_email})")
+                        else:
+                            print("❌ NO BACKUP: No backup account available for switching")
+                    else:
+                        print(f"🔄 BROWSER RESET: Multiple errors with BACKUP account ({backup_email})")
+                        print("🔄 Reinitializing backup browser...")
+                        try:
+                            if browser_monitor_backup: browser_monitor_backup.close()
+                            if pw_runtime_backup: pw_runtime_backup.stop()
+                        except Exception as e_cleanup: 
+                            print(f"Error during backup browser cleanup: {e_cleanup}")
+                        
+                        time.sleep(5)
+                        pw_runtime_backup, browser_monitor_backup, context_monitor_backup = switch_to_backup_account()
+                        if pw_runtime_backup and browser_monitor_backup and context_monitor_backup:
+                            print(f"✅ BACKUP RESET: Successfully reinitialized backup account ({backup_email})")
+                        else:
+                            print(f"❌ BACKUP RESET: Failed to reinitialize backup account ({backup_email})")
+                            using_backup_account = False
+                
+                if consecutive_error_count >= max_consecutive_errors:
+                    print(f"🚫 MAX ERRORS REACHED: {consecutive_error_count}/{max_consecutive_errors} consecutive errors")
+                    print(f"⏰ EXTENDED BACKOFF: Backing off for {current_wait_time} seconds before trying again")
+                    print("💡 This is NOT fatal - monitoring will continue after backoff period")
+                else:
+                    print(f"⚠️  ERROR COUNT: {consecutive_error_count}/{max_consecutive_errors} consecutive errors")
+                    print(f"⏰ BACKOFF: Waiting {current_wait_time} seconds before retry")
             
             except Exception as e_cycle:
                 print(f"Unexpected error during scraping cycle: {e_cycle}")
