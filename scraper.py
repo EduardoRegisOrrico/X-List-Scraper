@@ -1178,13 +1178,12 @@ def switch_to_backup_account(pw_runtime):
     try:
         print("🔄 BACKUP ACCOUNT: Creating new browser with different fingerprint...")
         
-        # Different browser args for backup account
+        # Different browser args for backup account (removed --user-data-dir)
         browser_backup = pw_runtime.chromium.launch(
             headless=True,
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--disable-features=IsolateOrigins,site-per-process',
-                '--user-data-dir=/tmp/backup-x-profile',  # Different profile directory
                 '--disable-extensions',
                 '--disable-plugins',
                 '--disable-images',  # Faster loading, different fingerprint
@@ -1631,14 +1630,6 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                 print("Backup browser closed.")
             except Exception as e_close_backup:
                 print(f"Non-fatal error closing backup browser: {e_close_backup}")
-        
-        if pw_runtime_backup:
-            try:
-                print("Stopping backup Playwright...")
-                pw_runtime_backup.stop()
-                print("Backup Playwright stopped.")
-            except Exception as e_stop_backup:
-                print(f"Non-fatal error stopping backup Playwright: {e_stop_backup}")
         
         print("Monitoring ended.")
 
