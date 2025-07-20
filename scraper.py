@@ -13,6 +13,14 @@ import random
 import sys
 from bs4 import BeautifulSoup
 import re
+try:
+    from stem import Signal
+    from stem.control import Controller
+    TOR_AVAILABLE = True
+except ImportError:
+    print("Warning: stem library not installed. Tor functionality will be disabled.")
+    print("Install with: pip install stem")
+    TOR_AVAILABLE = False
 
 # Use data directory for persistence in Docker
 DATA_DIR = os.getenv("DATA_DIR", ".")
@@ -25,6 +33,146 @@ MAX_TWEETS_HISTORY = 500  # Maximum number of tweets to keep in tweets.json
 # Custom Exception for page load failures
 class PageLoadError(Exception):
     pass
+
+# Tor configuration - load from environment variables
+def get_tor_config():
+    """Get Tor configuration from environment variables"""
+    load_dotenv()
+    return {
+        'host': os.getenv('TOR_PROXY_HOST', '127.0.0.1'),
+        'port': int(os.getenv('TOR_PROXY_PORT', '9050')),
+        'control_port': int(os.getenv('TOR_CONTROL_PORT', '9051')),
+        'use_for_primary': os.getenv('USE_TOR_FOR_PRIMARY', 'false').lower() == 'true',
+        'use_for_backup': os.getenv('USE_TOR_FOR_BACKUP', 'true').lower() == 'true'
+    }
+
+def get_new_tor_circuit():
+    """Request a new Tor circuit to get a different IP address"""
+    if not TOR_AVAILABLE:
+        print("Warning: Tor functionality not available (stem library not installed)")
+        return False
+    
+    try:
+        tor_config = get_tor_config()
+        with Controller.from_port(port=tor_config['control_port']) as controller:
+            controller.authenticate()
+            controller.signal(Signal.NEWNYM)
+            print("🔄 TOR: Requested new circuit for IP rotation")
+            time.sleep(5)  # Wait for new circuit to be established
+            return True
+    except Exception as e:
+        print(f"❌ TOR: Failed to get new circuit: {e}")
+        return False
+
+def check_tor_connection():
+    """Check if Tor is working and return current IP"""
+    try:
+        tor_config = get_tor_config()
+        
+        # Test direct connection first
+        direct_response = requests.get('https://httpbin.org/ip', timeout=10)
+        direct_ip = direct_response.json().get('origin', 'Unknown')
+        
+        # Test Tor connection
+        tor_proxies = {
+            'http': f'socks5://{tor_config["host"]}:{tor_config["port"]}',
+            'https': f'socks5://{tor_config["host"]}:{tor_config["port"]}'
+        }
+        
+        tor_response = requests.get('https://httpbin.org/ip', proxies=tor_proxies, timeout=10)
+        tor_ip = tor_response.json().get('origin', 'Unknown')
+        
+        print(f"🌐 DIRECT IP: {direct_ip}")
+        print(f"🧅 TOR IP: {tor_ip}")
+        
+        if direct_ip != tor_ip:
+            print("✅ TOR: Proxy is working correctly")
+            return True, tor_ip
+        else:
+            print("❌ TOR: Proxy may not be working (same IP)")
+            return False, direct_ip
+            
+    except Exception as e:
+        print(f"❌ TOR: Connection check failed: {e}")
+        return False, None
+
+def create_tor_browser_context(pw_runtime, headless=True, account_type="primary"):
+    """Create a browser context configured to use Tor proxy"""
+    print(f"🧅 TOR: Creating Tor-enabled browser for {account_type} account")
+    
+    # Different user agents for different account types
+    tor_user_agents = {
+        "primary": [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+            "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        ],
+        "backup": [
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/115.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0",
+        ]
+    }
+    
+    selected_agents = tor_user_agents.get(account_type, tor_user_agents["primary"])
+    user_agent = selected_agents[int(time.time()) % len(selected_agents)]
+    
+    try:
+        tor_config = get_tor_config()
+        
+        # Launch browser with Tor proxy configuration
+        browser = pw_runtime.chromium.launch(
+            headless=headless,
+            proxy={
+                "server": f"socks5://{tor_config['host']}:{tor_config['port']}"
+            },
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-extensions',
+                '--disable-plugins',
+                '--disable-images' if account_type == "backup" else '',
+                '--memory-pressure-off',
+                '--max_old_space_size=4096'
+            ]
+        )
+        
+        # Create context with Tor-friendly settings
+        viewport_configs = {
+            "primary": {"width": 1920, "height": 1080},
+            "backup": {"width": 1366, "height": 768}
+        }
+        
+        context = browser.new_context(
+            viewport=viewport_configs.get(account_type, {"width": 1920, "height": 1080}),
+            user_agent=user_agent,
+            locale='en-US' if account_type == "primary" else 'en-GB',
+            timezone_id='America/New_York' if account_type == "primary" else 'Europe/London',
+            extra_http_headers={
+                'Accept-Language': 'en-US,en;q=0.9' if account_type == "primary" else 'en-GB,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Upgrade-Insecure-Requests': '1',
+            }
+        )
+        
+        # Add anti-detection script
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+            });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+        """)
+        
+        print(f"🧅 TOR: Browser created for {account_type} account with user agent: {user_agent[:50]}...")
+        return browser, context
+        
+    except Exception as e:
+        print(f"❌ TOR: Failed to create Tor browser for {account_type}: {e}")
+        return None, None
 
 def auto_login(existing_context=None):
     """Automatically login using credentials from environment variables"""
@@ -1164,10 +1312,11 @@ def trigger_tweet_analysis():
         return False
 
 def switch_to_backup_account(pw_runtime):
-    """Initialize backup account browser and context using existing playwright runtime with different fingerprint"""
+    """Initialize backup account browser and context using Tor proxy for enhanced anonymity"""
     load_dotenv()
     backup_email = os.getenv("X_EMAIL_BACKUP")
     backup_password = os.getenv("X_PASSWORD_BACKUP")
+    use_tor = os.getenv("USE_TOR_FOR_BACKUP", "true").lower() == "true"
     
     print(f"\n🔄 ACCOUNT SWITCH: Initializing backup account ({backup_email})")
     
@@ -1176,87 +1325,108 @@ def switch_to_backup_account(pw_runtime):
         return None, None
     
     try:
-        print("🔄 BACKUP ACCOUNT: Creating new browser with different fingerprint...")
+        # Check Tor connection if enabled
+        if use_tor and TOR_AVAILABLE:
+            print("🧅 TOR: Checking Tor connection for backup account...")
+            tor_working, tor_ip = check_tor_connection()
+            if tor_working:
+                print(f"✅ TOR: Connection verified, using IP: {tor_ip}")
+                # Get new circuit for backup account
+                get_new_tor_circuit()
+            else:
+                print("⚠️  TOR: Connection failed, falling back to direct connection")
+                use_tor = False
         
-        # Different browser args for backup account (removed --user-data-dir)
-        browser_backup = pw_runtime.chromium.launch(
-            headless=True,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--disable-features=IsolateOrigins,site-per-process',
-                '--disable-extensions',
-                '--disable-plugins',
-                '--disable-images',  # Faster loading, different fingerprint
-                '--disable-javascript-harmony-shipping',
-                '--memory-pressure-off',
-                '--max_old_space_size=4096'
+        if use_tor and TOR_AVAILABLE:
+            print("🧅 TOR: Creating Tor-enabled browser for backup account...")
+            browser_backup, context_backup = create_tor_browser_context(pw_runtime, headless=True, account_type="backup")
+        else:
+            print("🔄 BACKUP ACCOUNT: Creating standard browser with different fingerprint...")
+            
+            # Different browser args for backup account
+            browser_backup = pw_runtime.chromium.launch(
+                headless=True,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--disable-extensions',
+                    '--disable-plugins',
+                    '--disable-images',  # Faster loading, different fingerprint
+                    '--disable-javascript-harmony-shipping',
+                    '--memory-pressure-off',
+                    '--max_old_space_size=4096'
+                ]
+            )
+            
+            # Completely different browser fingerprint
+            backup_user_agents = [
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+                "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0"
             ]
-        )
+            
+            # Select different user agent from backup pool
+            backup_user_agent = backup_user_agents[int(time.time()) % len(backup_user_agents)]
+            
+            context_backup = browser_backup.new_context(
+                viewport={"width": 1366, "height": 768},  # Different viewport size
+                user_agent=backup_user_agent,
+                locale='en-GB',  # Different locale
+                timezone_id='Europe/London',  # Different timezone
+                color_scheme='dark',  # Different color scheme
+                reduced_motion='reduce',  # Different motion preference
+                forced_colors='none',
+                extra_http_headers={
+                    'Accept-Language': 'en-GB,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1'
+                }
+            )
+            
+            # Add different browser fingerprint script
+            context_backup.add_init_script("""
+                // Different fingerprint for backup account
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => false,
+                });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5, 6, 7],  // Different plugin count
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-GB', 'en'],  // Different language preference
+                });
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'MacIntel',  // Different platform
+                });
+                Object.defineProperty(navigator, 'hardwareConcurrency', {
+                    get: () => 8,  // Different CPU core count
+                });
+                Object.defineProperty(screen, 'width', {
+                    get: () => 1366,
+                });
+                Object.defineProperty(screen, 'height', {
+                    get: () => 768,
+                });
+                Object.defineProperty(screen, 'availWidth', {
+                    get: () => 1366,
+                });
+                Object.defineProperty(screen, 'availHeight', {
+                    get: () => 728,
+                });
+            """)
+            
+            print(f"🔧 BACKUP FINGERPRINT: Using {backup_user_agent[:50]}...")
         
-        # Completely different browser fingerprint
-        backup_user_agents = [
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
-            "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0"
-        ]
+        if not browser_backup or not context_backup:
+            print("❌ BACKUP ACCOUNT: Failed to create browser/context")
+            return None, None
         
-        # Select different user agent from backup pool
-        backup_user_agent = backup_user_agents[int(time.time()) % len(backup_user_agents)]
-        
-        context_backup = browser_backup.new_context(
-            viewport={"width": 1366, "height": 768},  # Different viewport size
-            user_agent=backup_user_agent,
-            locale='en-GB',  # Different locale
-            timezone_id='Europe/London',  # Different timezone
-            color_scheme='dark',  # Different color scheme
-            reduced_motion='reduce',  # Different motion preference
-            forced_colors='none',
-            extra_http_headers={
-                'Accept-Language': 'en-GB,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1'
-            }
-        )
-        
-        # Add different browser fingerprint script
-        context_backup.add_init_script("""
-            // Different fingerprint for backup account
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => false,
-            });
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5, 6, 7],  // Different plugin count
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-GB', 'en'],  // Different language preference
-            });
-            Object.defineProperty(navigator, 'platform', {
-                get: () => 'MacIntel',  // Different platform
-            });
-            Object.defineProperty(navigator, 'hardwareConcurrency', {
-                get: () => 8,  // Different CPU core count
-            });
-            Object.defineProperty(screen, 'width', {
-                get: () => 1366,
-            });
-            Object.defineProperty(screen, 'height', {
-                get: () => 768,
-            });
-            Object.defineProperty(screen, 'availWidth', {
-                get: () => 1366,
-            });
-            Object.defineProperty(screen, 'availHeight', {
-                get: () => 728,
-            });
-        """)
-        
-        print(f"🔧 BACKUP FINGERPRINT: Using {backup_user_agent[:50]}...")
         print(f"🔧 BACKUP FINGERPRINT: Viewport 1366x768, Locale en-GB, Timezone Europe/London")
         
         # Add random delay to make requests less predictable
@@ -1634,11 +1804,29 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
         print("Monitoring ended.")
 
 def initialize_browser(headless=True, account_suffix=""):
-    """Initialize a browser with a random user agent and return the components."""
+    """Initialize a browser with optional Tor support and return the components."""
     print(f"Initializing Playwright and browser{' for ' + account_suffix if account_suffix else ''}...")
     pw_runtime = sync_playwright().start()
     
-    # Create browser with custom user agent to reduce detection
+    # Check if we should use Tor for primary account
+    tor_config = get_tor_config()
+    use_tor_primary = tor_config['use_for_primary'] and account_suffix == "primary"
+    
+    if use_tor_primary and TOR_AVAILABLE:
+        print("🧅 TOR: Checking Tor connection for primary account...")
+        tor_working, tor_ip = check_tor_connection()
+        if tor_working:
+            print(f"✅ TOR: Connection verified for primary account, using IP: {tor_ip}")
+            browser, context = create_tor_browser_context(pw_runtime, headless, "primary")
+            if browser and context:
+                print("✅ TOR: Primary account browser created successfully")
+                return pw_runtime, browser, context
+            else:
+                print("❌ TOR: Failed to create Tor browser, falling back to standard browser")
+        else:
+            print("⚠️  TOR: Connection failed for primary account, using standard browser")
+    
+    # Standard browser initialization (fallback or when Tor is disabled)
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
