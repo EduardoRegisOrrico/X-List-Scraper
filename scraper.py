@@ -779,12 +779,13 @@ def auto_login_backup_account(existing_context=None):
             
             for selector in email_selectors:
                 try:
-                    page.wait_for_selector(selector, timeout=5000)
+                    page.wait_for_selector(selector, timeout=10000)  # Increased timeout
                     page.fill(selector, email)
                     print(f"Backup email filled using selector: {selector}")
                     email_filled = True
                     break
-                except:
+                except Exception as e:
+                    print(f"Failed to find/fill selector {selector}: {e}")
                     continue
             
             if not email_filled:
@@ -1348,81 +1349,28 @@ def switch_to_backup_account(pw_runtime):
         if not use_tor or not TOR_AVAILABLE:
             print("🔄 BACKUP ACCOUNT: Creating standard browser with different fingerprint...")
             
-            # Different browser args for backup account
+            # Use simpler browser args similar to test script that works
             browser_backup = pw_runtime.chromium.launch(
                 headless=True,
                 args=[
                     '--disable-blink-features=AutomationControlled',
                     '--disable-features=IsolateOrigins,site-per-process',
-                    '--disable-extensions',
-                    '--disable-plugins',
-                    '--disable-images',  # Faster loading, different fingerprint
-                    '--disable-javascript-harmony-shipping',
-                    '--memory-pressure-off',
-                    '--max_old_space_size=4096'
                 ]
             )
             
-            # Completely different browser fingerprint
-            backup_user_agents = [
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
-                "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:122.0) Gecko/20100101 Firefox/122.0",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0"
-            ]
+            # Use the same user agent that works in the test
+            backup_user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15"
             
-            # Select different user agent from backup pool
-            backup_user_agent = backup_user_agents[int(time.time()) % len(backup_user_agents)]
-            
+            # Simpler context creation similar to test script
             context_backup = browser_backup.new_context(
-                viewport={"width": 1366, "height": 768},  # Different viewport size
-                user_agent=backup_user_agent,
-                locale='en-GB',  # Different locale
-                timezone_id='Europe/London',  # Different timezone
-                color_scheme='dark',  # Different color scheme
-                reduced_motion='reduce',  # Different motion preference
-                forced_colors='none',
-                extra_http_headers={
-                    'Accept-Language': 'en-GB,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'DNT': '1',
-                    'Upgrade-Insecure-Requests': '1',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                    'Sec-Fetch-User': '?1'
-                }
+                viewport={"width": 1366, "height": 768},
+                user_agent=backup_user_agent
             )
             
-            # Add different browser fingerprint script
+            # Add minimal anti-detection script
             context_backup.add_init_script("""
-                // Different fingerprint for backup account
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => false,
-                });
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5, 6, 7],  // Different plugin count
-                });
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-GB', 'en'],  // Different language preference
-                });
-                Object.defineProperty(navigator, 'platform', {
-                    get: () => 'MacIntel',  // Different platform
-                });
-                Object.defineProperty(navigator, 'hardwareConcurrency', {
-                    get: () => 8,  // Different CPU core count
-                });
-                Object.defineProperty(screen, 'width', {
-                    get: () => 1366,
-                });
-                Object.defineProperty(screen, 'height', {
-                    get: () => 768,
-                });
-                Object.defineProperty(screen, 'availWidth', {
-                    get: () => 1366,
-                });
-                Object.defineProperty(screen, 'availHeight', {
-                    get: () => 728,
                 });
             """)
             
@@ -1432,12 +1380,7 @@ def switch_to_backup_account(pw_runtime):
             print("❌ BACKUP ACCOUNT: Failed to create browser/context")
             return None, None
         
-        print(f"🔧 BACKUP FINGERPRINT: Viewport 1366x768, Locale en-GB, Timezone Europe/London")
-        
-        # Add random delay to make requests less predictable
-        initial_delay = random.uniform(3, 8)
-        print(f"🔧 BACKUP TIMING: Adding {initial_delay:.1f}s initial delay for natural behavior")
-        time.sleep(initial_delay)
+        print(f"🔧 BACKUP FINGERPRINT: Viewport 1366x768, Simple configuration for reliability")
         
         # Try to load existing backup session first
         print(f"🔍 BACKUP ACCOUNT: Checking for existing session ({backup_email})")
