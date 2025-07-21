@@ -1461,7 +1461,7 @@ def switch_to_backup_account(pw_runtime):
 
 
 
-def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_time=1, headless=True, limit=None, max_consecutive_errors=5, max_history=MAX_TWEETS_HISTORY):
+def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_time=1, headless=True, limit=None, max_consecutive_errors=3, max_history=MAX_TWEETS_HISTORY):
     """Monitor Twitter list for new tweets with rate limiting protection."""
     last_tweet_id = load_last_tweet_id()
     all_tweets_ever_saved_json = [] # For tweets.json cache/backup
