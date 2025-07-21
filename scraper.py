@@ -1333,14 +1333,19 @@ def switch_to_backup_account(pw_runtime):
                 print(f"✅ TOR: Connection verified, using IP: {tor_ip}")
                 # Get new circuit for backup account
                 get_new_tor_circuit()
+                print("🧅 TOR: Creating Tor-enabled browser for backup account...")
+                browser_backup, context_backup = create_tor_browser_context(pw_runtime, headless=True, account_type="backup")
+                
+                if browser_backup and context_backup:
+                    print("✅ TOR: Backup account browser created successfully")
+                else:
+                    print("❌ TOR: Failed to create Tor browser, falling back to standard browser")
+                    use_tor = False
             else:
                 print("⚠️  TOR: Connection failed, falling back to direct connection")
                 use_tor = False
         
-        if use_tor and TOR_AVAILABLE:
-            print("🧅 TOR: Creating Tor-enabled browser for backup account...")
-            browser_backup, context_backup = create_tor_browser_context(pw_runtime, headless=True, account_type="backup")
-        else:
+        if not use_tor or not TOR_AVAILABLE:
             print("🔄 BACKUP ACCOUNT: Creating standard browser with different fingerprint...")
             
             # Different browser args for backup account
