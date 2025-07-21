@@ -22,6 +22,9 @@ except ImportError:
     print("Install with: pip install stem")
     TOR_AVAILABLE = False
 
+# Import our rate limit debugger
+from rate_limit_debugger import RateLimitDebugger, setup_rate_limit_debugging
+
 # Use data directory for persistence in Docker
 DATA_DIR = os.getenv("DATA_DIR", ".")
 SESSION_FILE = os.path.join(DATA_DIR, "x_session.json")
@@ -1411,6 +1414,10 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
     consecutive_error_count = 0
     base_wait_time = interval # Store the original interval for normal operation
     current_wait_time = base_wait_time # This will change during backoff
+    
+    # Initialize rate limit debugger
+    debugger = RateLimitDebugger()
+    print("🔍 RATE LIMIT DEBUGGER: Initialized - will capture all rate limit events")
 
     if os.path.exists(TWEETS_FILE):
         try:
@@ -1459,6 +1466,8 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             session_available = True
             print(f"✅ PRIMARY ACCOUNT SESSION: Valid session found for {primary_email}")
             print("🔄 Using PRIMARY account for monitoring")
+            # Setup debugging hooks for primary account
+            setup_rate_limit_debugging(context_monitor, debugger)
         else:
             print(f"❌ PRIMARY ACCOUNT SESSION: No valid session found for {primary_email}")
             print("🔄 Attempting automatic login for PRIMARY account...")
@@ -1589,6 +1598,10 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                 if newly_scraped_tweets:
                     print(f"Found {len(newly_scraped_tweets)} new tweets this cycle!")
                     
+                    # Mark successful scraping for rate limit debugging
+                    current_account_email = primary_email if not using_backup_account else backup_email
+                    debugger.mark_success(current_account_email or "unknown")
+                    
                     existing_ids_json = {tweet["id"] for tweet in all_tweets_ever_saved_json}
                     unique_new_tweets_to_add_json = [
                         tweet for tweet in newly_scraped_tweets if tweet["id"] not in existing_ids_json
@@ -1637,9 +1650,22 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             except PageLoadError as ple:
                 current_account = "PRIMARY" if not using_backup_account else "BACKUP"
                 current_email = primary_email if not using_backup_account else backup_email
+                current_context = context_monitor if not using_backup_account else context_monitor_backup
                 
                 print(f"🚫 {current_account} ACCOUNT ERROR: Page load/scrape error for {current_email}")
                 print(f"   Error details: {ple}")
+                
+                # CAPTURE RATE LIMIT EVENT FOR DEBUGGING
+                error_type = "timeout" if "timeout" in str(ple).lower() or "wait_for_selector" in str(ple).lower() else "page_load_error"
+                debugger.capture_rate_limit_event(
+                    context=current_context,
+                    account_name=current_email or "unknown",
+                    account_type=current_account.lower(),
+                    url=list_url,
+                    error_type=error_type,
+                    error_message=str(ple)
+                )
+                
                 consecutive_error_count += 1
                 current_wait_time = min(1800, base_wait_time * (2 ** consecutive_error_count))
                 
@@ -1704,6 +1730,19 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             # Calculate wait time and sleep
             elapsed_cycle = time.time() - start_time_cycle
             actual_wait_time = max(1, current_wait_time - elapsed_cycle)
+            
+            # Periodic rate limit analysis (every 10 cycles or when we have errors)
+            cycle_count = getattr(monitor_list_real_time, 'cycle_count', 0) + 1
+            monitor_list_real_time.cycle_count = cycle_count
+            
+            if cycle_count % 10 == 0 or consecutive_error_count > 0:
+                if debugger.events:
+                    print(f"\n🔍 PERIODIC ANALYSIS: Cycle {cycle_count} - {len(debugger.events)} rate limit events captured")
+                    analysis = debugger.analyze_patterns()
+                    if analysis.get("recommendations"):
+                        print("💡 Current recommendations:")
+                        for rec in analysis["recommendations"][:2]:  # Show top 2 recommendations
+                            print(f"   {rec}")
             
             print(f"Waiting {int(actual_wait_time)} seconds before next check...")
             time.sleep(actual_wait_time)
