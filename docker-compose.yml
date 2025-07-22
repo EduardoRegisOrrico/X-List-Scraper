@@ -13,17 +13,19 @@ services:
     # Additional environment variables
     environment:
       - DATA_DIR=/app/data
+      - PYTHONUNBUFFERED=1
     
     # Volume mounts for persistence
     volumes:
       - ./data:/app/data  # Session files, tweets, etc.
-      - ./logs:/app/logs  # Optional: for log files
+      - ./logs:/app/logs  # Log files
+      - ./debug_logs:/app/debug_logs  # Debug logs for rate limiting
     
     # Network configuration for database access
     networks:
       - newsio-network
     
-    # Resource limits (optional)
+    # Resource limits
     deploy:
       resources:
         limits:
@@ -33,15 +35,35 @@ services:
           memory: 512M
           cpus: '0.5'
     
-    # Override default command with monitoring
+    # Improved monitoring command with proper proxy rotation
     command: >
-      python scraper.py 
-      --url "https://x.com/i/lists/1919380958723158457"
-      --interval 2
-      --scrolls 2
-      --limit 10
+      python -c "
+      from scraper import monitor_list_real_time, get_db_connection;
+      import sys;
+      db_conn = get_db_connection();
+      if not db_conn: sys.exit(1);
+      monitor_list_real_time(
+        db_conn=db_conn,
+        list_url='https://x.com/i/lists/1919380958723158457',
+        interval=60,
+        max_scrolls=3,
+        limit=10,
+        headless=True
+      )"
 
-  # Optional: Database monitoring service
+  # Proxy rotation test service
+  proxy-test:
+    build: .
+    container_name: x-scraper-proxy-test
+    env_file:
+      - .env
+    command: python tests/test_decodo_proxy.py
+    networks:
+      - newsio-network
+    profiles:
+      - testing
+
+  # Database monitoring service
   db-monitor:
     build: .
     container_name: x-scraper-db-monitor
@@ -52,7 +74,23 @@ services:
     networks:
       - newsio-network
     profiles:
-      - monitoring 
+      - monitoring
+
+  # Test runner service
+  test-runner:
+    build: .
+    container_name: x-scraper-tests
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./debug_logs:/app/debug_logs
+    command: python tests/test_runner.py
+    networks:
+      - newsio-network
+    profiles:
+      - testing
 
 networks:
   newsio-network:
