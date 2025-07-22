@@ -25,21 +25,11 @@ services:
     networks:
       - newsio-network
     
-    # Resource limits
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-        reservations:
-          memory: 512M
-          cpus: '0.5'
-    
     # Default monitoring command
     command: >
       python scraper.py
       --url "https://x.com/i/lists/1919380958723158457"
-      --interval 60
+      --interval 4
       --scrolls 3
       --limit 10
 
