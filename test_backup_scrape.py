@@ -345,6 +345,12 @@ def test_backup_account_scraping():
                 else:
                     print("⚠️  Page loaded but no tweets visible")
                 
+                # Save page content for analysis
+                debug_file = f"backup_no_tweets_{int(time.time())}.html"
+                with open(debug_file, 'w') as f:
+                    f.write(content)
+                print(f"📄 Page content saved to {debug_file} for analysis")
+                
                 return False
                 
         except Exception as e:

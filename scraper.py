@@ -639,10 +639,6 @@ def save_tweet_to_db(tweet_data, conn):
             return False, conn
 
         # Print the raw tweet data for debugging
-        print(f"Tweet data for DB save (ID: {tweet_data['id']}):")
-        print(f"  - Text: {tweet_data['text'][:50]}...")
-        print(f"  - Raw user data: {tweet_data.get('user', {})}")
-
         # Extract username directly - Twitter API sometimes nests it differently
         username = None
         if 'user' in tweet_data:
@@ -654,12 +650,9 @@ def save_tweet_to_db(tweet_data, conn):
                 elif 'screen_name' in tweet_data:
                     username = tweet_data['screen_name']
 
-        # Debug output for username
+        # Only warn if username extraction completely fails
         if not username:
             print(f"WARNING: Username not found for tweet {tweet_data['id']}")
-            print(f"User data: {tweet_data.get('user', {})}")
-        else:
-            print(f"Found username for DB: {username}")
 
         with conn.cursor() as cur:
             # Handle date parsing with fallback
@@ -687,8 +680,6 @@ def save_tweet_to_db(tweet_data, conn):
             ON CONFLICT ("tweetId") DO NOTHING;
             """
             
-            print(f"Executing SQL with username: {username}")
-            
             cur.execute(sql, (
                 tweet_id,           # Add the generated UUID as the primary key
                 tweet_data['id'],
@@ -700,7 +691,6 @@ def save_tweet_to_db(tweet_data, conn):
                 None                # contentFingerprint (optional)
             ))
             conn.commit()
-            print(f"Successfully saved tweet {tweet_data['id']} to database with username: {username}")
             return True, conn
     except Exception as e:
         print(f"Error saving tweet {tweet_data.get('id')} to DB: {e}")
@@ -961,8 +951,6 @@ def extract_tweet_metadata(tweet_content):
     if not tweet_id:
         return None
     
-    print(f"\nExtracting metadata for tweet ID: {tweet_id}")
-        
     legacy = tweet_content.get("legacy", {})
     tweet_text = legacy.get("full_text")
     
@@ -1074,7 +1062,6 @@ def extract_tweet_metadata(tweet_content):
                 for match in screen_name_matches:
                     if match and match != "Unknown":
                         user_data["username"] = match
-                        print(f"Username found via fallback search: {match}")
                         break
     
     # Look for name field as well via regex if not found
@@ -1086,7 +1073,6 @@ def extract_tweet_metadata(tweet_content):
                 for match in name_matches:
                     if match and match != "Unknown" and match != "":
                         user_data["name"] = match
-                        print(f"Name found via fallback search: {match}")
                         break
     
     # If we found a username in the legacy data but not in the user paths
@@ -1100,11 +1086,9 @@ def extract_tweet_metadata(tweet_content):
         user_data["username"] = f"{generated_username}_user"
         print(f"Generated username from name: {user_data['username']}")
     
-    # Only print warnings if extraction failed
+    # Only print warnings if extraction completely fails
     if user_data["username"] == "Unknown" or user_data["username"] is None:
         print(f"WARNING: Could not extract username for tweet {tweet_id}")
-    if user_data["name"] == "Unknown" or user_data["name"] is None:
-        print(f"WARNING: Could not extract name for tweet {tweet_id}")
     
     tweet_data["user"] = user_data
     
@@ -1226,7 +1210,7 @@ def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, contex
         
         print(f"Navigating to {list_url}...")
         page.goto(list_url, timeout=30000)
-        page.wait_for_selector("[data-testid='cellInnerDiv']", timeout=15000) # Using 15000 as per user traceback
+        page.wait_for_selector("[data-testid='cellInnerDiv']", timeout=25000) # Increased timeout for better reliability
         print("Page content loaded.")
 
         for i in range(max_scrolls + 1):
@@ -1236,28 +1220,11 @@ def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, contex
                 time.sleep(wait_time)
             else:
                 print("Initial content check after page load...")
-                time.sleep(max(wait_time, 1.5))
+                # Give more time for initial load, especially for backup account
+                initial_wait = max(wait_time, 3.0) if is_backup_account else max(wait_time, 1.5)
+                time.sleep(initial_wait)
                 
-            # Debug XHR calls before processing
-            if _xhr_calls_buffer:
-                print(f"Found {len(_xhr_calls_buffer)} XHR calls to process")
-                for idx, xhr in enumerate(_xhr_calls_buffer[:3]):  # Log first 3 for debugging
-                    try:
-                        print(f"XHR {idx+1} URL: {xhr.url}")
-                        if "ListLatestTweetsTimeline" in xhr.url:
-                            xhr_data = xhr.json()
-                            # Check data structure for debugging
-                            data_keys = list(xhr_data.keys()) if isinstance(xhr_data, dict) else "Not a dict"
-                            print(f"XHR {idx+1} data keys: {data_keys}")
-                            
-                            # Try to find instructions
-                            if isinstance(xhr_data, dict) and 'data' in xhr_data:
-                                if 'list' in xhr_data['data']:
-                                    tweets_path = xhr_data.get('data', {}).get('list', {}).get('tweets_timeline', {})
-                                    if tweets_path:
-                                        print(f"Found tweets_timeline in response {idx+1}")
-                    except Exception as e:
-                        print(f"Error examining XHR {idx+1}: {e}")
+
             
             newly_processed_this_scroll, id_this_batch, limit_hit = _process_xhr_calls(
                 _xhr_calls_buffer, last_tweet_id, limit, seen_ids, all_new_tweets_metadata
@@ -1349,36 +1316,55 @@ def switch_to_backup_account(pw_runtime, port_index=None):
         port_index = int(time.time()) % len(DECODO_PORTS)
     
     print(f"\n🔄 ACCOUNT SWITCH: Initializing backup account ({backup_email})")
-    print(f"🔗 DECODO: Using proxy port {DECODO_PORTS[port_index]} for backup account")
     
     if not backup_email or not backup_password:
         print("❌ BACKUP ACCOUNT: Credentials not found in environment variables")
         return None, None
     
     try:
-        # Check Decodo proxy connection
-        print("🔗 DECODO: Checking proxy connection for backup account...")
-        proxy_working, proxy_ip = check_decodo_connection(port_index)
+        # Try all proxy ports before falling back to no proxy
+        browser_backup = None
+        context_backup = None
         
-        if proxy_working:
-            print(f"✅ DECODO: Proxy connection verified, using IP: {proxy_ip}")
-            print("🔗 DECODO: Creating proxy-enabled browser for backup account...")
-            browser_backup, context_backup = create_decodo_browser_context(
-                pw_runtime, 
-                headless=True, 
-                account_type="backup", 
-                port_index=port_index
-            )
+        for attempt in range(len(DECODO_PORTS)):
+            current_port_index = (port_index + attempt) % len(DECODO_PORTS)
+            current_port = DECODO_PORTS[current_port_index]
             
-            if browser_backup and context_backup:
-                print("✅ DECODO: Backup account browser created successfully")
+            print(f"🔗 DECODO: Attempting proxy port {current_port} (attempt {attempt + 1}/{len(DECODO_PORTS)})")
+            
+            # Check proxy connection
+            proxy_working, proxy_ip = check_decodo_connection(current_port_index)
+            
+            if proxy_working:
+                print(f"✅ DECODO: Proxy connection verified on port {current_port}, using IP: {proxy_ip}")
+                print(f"🔗 DECODO: Creating proxy-enabled browser for backup account...")
+                
+                browser_backup, context_backup = create_decodo_browser_context(
+                    pw_runtime, 
+                    headless=True, 
+                    account_type="backup", 
+                    port_index=current_port_index
+                )
+                
+                if browser_backup and context_backup:
+                    print(f"✅ DECODO: Backup account browser created successfully on port {current_port}")
+                    break
+                else:
+                    print(f"❌ DECODO: Failed to create proxy browser on port {current_port}")
+                    if browser_backup:
+                        try:
+                            browser_backup.close()
+                        except:
+                            pass
+                    browser_backup = None
+                    context_backup = None
             else:
-                print("❌ DECODO: Failed to create proxy browser, falling back to standard browser")
-                # Fallback to standard browser
-                browser_backup, context_backup = create_standard_backup_browser(pw_runtime, port_index)
-        else:
-            print("⚠️  DECODO: Proxy connection failed, falling back to standard browser")
-            # Fallback to standard browser
+                print(f"❌ DECODO: Proxy connection failed on port {current_port}")
+        
+        # If all proxy ports failed, only then fall back to standard browser
+        if not browser_backup or not context_backup:
+            print("⚠️  DECODO: All proxy ports failed, falling back to standard browser")
+            print("🚨 WARNING: Backup account will use same IP as primary account!")
             browser_backup, context_backup = create_standard_backup_browser(pw_runtime, port_index)
         
         if not browser_backup or not context_backup:
