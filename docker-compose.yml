@@ -35,21 +35,13 @@ services:
           memory: 512M
           cpus: '0.5'
     
-    # Improved monitoring command with proper proxy rotation
+    # Default monitoring command
     command: >
-      python -c "
-      from scraper import monitor_list_real_time, get_db_connection;
-      import sys;
-      db_conn = get_db_connection();
-      if not db_conn: sys.exit(1);
-      monitor_list_real_time(
-        db_conn=db_conn,
-        list_url='https://x.com/i/lists/1919380958723158457',
-        interval=60,
-        max_scrolls=3,
-        limit=10,
-        headless=True
-      )"
+      python scraper.py
+      --url "https://x.com/i/lists/1919380958723158457"
+      --interval 60
+      --scrolls 3
+      --limit 10
 
   # Proxy rotation test service
   proxy-test:

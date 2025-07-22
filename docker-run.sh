@@ -41,6 +41,11 @@ case $COMMAND in
     
     "monitor")
         echo "Starting monitoring service..."
+        # Ensure network exists
+        if ! docker network ls | grep -q "newsio-single_newsio-network"; then
+            echo "Creating Docker network..."
+            docker network create newsio-single_newsio-network
+        fi
         $DOCKER_COMPOSE up -d x-scraper
         echo "Monitor started. Use '$DOCKER_COMPOSE logs -f x-scraper' to view logs"
         ;;
