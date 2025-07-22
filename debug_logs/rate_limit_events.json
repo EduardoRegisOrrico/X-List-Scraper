@@ -1,0 +1,121 @@
+[
+  {
+    "timestamp": 1753214666.4765654,
+    "datetime_str": "2025-07-22T17:04:26.476565",
+    "account_name": "eduardoregis.orrico@gmail.com",
+    "account_type": "primary",
+    "url": "https://x.com/i/lists/1919380958723158457",
+    "error_type": "timeout",
+    "error_message": "Timeout loading page content for https://x.com/i/lists/1919380958723158457: Page.wait_for_selector: Timeout 25000ms exceeded.\nCall log:\n  - waiting for locator(\"[data-testid='cellInnerDiv']\") to be visible\n",
+    "page_html": "eduardoregis.orrico@gmail.com_1753214666_d41d8cd9.html",
+    "page_html_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "response_headers": {},
+    "network_info": {
+      "ip_address": "82.23.111.126",
+      "timestamp": 1753214666.4765654,
+      "url_accessed": "https://x.com/i/lists/1919380958723158457"
+    },
+    "browser_fingerprint": {},
+    "session_cookies": [
+      {
+        "name": "guest_id_marketing",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "guest_id_ads",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "guest_id",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "personalization_id",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "gt",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "guest_id_marketing",
+        "domain": ".twitter.com",
+        "path": "/"
+      },
+      {
+        "name": "guest_id_ads",
+        "domain": ".twitter.com",
+        "path": "/"
+      },
+      {
+        "name": "personalization_id",
+        "domain": ".twitter.com",
+        "path": "/"
+      },
+      {
+        "name": "guest_id",
+        "domain": ".twitter.com",
+        "path": "/"
+      },
+      {
+        "name": "__cf_bm",
+        "domain": ".twitter.com",
+        "path": "/"
+      },
+      {
+        "name": "NID",
+        "domain": ".google.com",
+        "path": "/"
+      },
+      {
+        "name": "kdt",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "auth_token",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "ct0",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "att",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "lang",
+        "domain": "x.com",
+        "path": "/"
+      },
+      {
+        "name": "twid",
+        "domain": ".x.com",
+        "path": "/"
+      },
+      {
+        "name": "IDE",
+        "domain": ".doubleclick.net",
+        "path": "/"
+      },
+      {
+        "name": "__cf_bm",
+        "domain": ".x.com",
+        "path": "/"
+      }
+    ],
+    "request_count_since_success": 1,
+    "time_since_last_success": 0.0,
+    "ip_address": "82.23.111.126",
+    "user_agent": "unknown"
+  }
+]

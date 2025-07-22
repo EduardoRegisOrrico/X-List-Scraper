@@ -1,0 +1,27 @@
+{
+  "total_events": 1,
+  "accounts_affected": 1,
+  "error_types": {
+    "timeout": 1
+  },
+  "ip_addresses": {
+    "82.23.111.126": 1
+  },
+  "time_patterns": {},
+  "request_count_patterns": {
+    "min": 1,
+    "max": 1,
+    "avg": 1.0,
+    "common_counts": {
+      "1": 1
+    }
+  },
+  "common_html_patterns": {
+    "d41d8cd98f00b204e9800998ecf8427e": 1
+  },
+  "recommendations": [
+    "\ud83c\udfaf All rate limits from same IP - IP-based limiting detected",
+    "\u23f0 More timeouts than explicit rate limits - may be soft limiting",
+    "\ud83d\udea8 Rate limits hit very quickly - aggressive limiting"
+  ]
+}

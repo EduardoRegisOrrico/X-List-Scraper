@@ -13,192 +13,34 @@ import random
 import sys
 from bs4 import BeautifulSoup
 import re
-# Load Decodo proxy configuration from environment variables
+
+# Use data directory for persistence in Docker
+DATA_DIR = os.getenv("DATA_DIR", ".")
+SESSION_FILE = os.path.join(DATA_DIR, "x_session.json")
+TWEETS_FILE = os.path.join(DATA_DIR, "tweets.json")
+LAST_ID_FILE = os.path.join(DATA_DIR, "last_tweet_id.txt")
+MAX_TWEETS_HISTORY = 500  # Maximum number of tweets to keep in tweets.json
+
+# Custom Exception for page load failures
+class PageLoadError(Exception):
+    pass
+
 load_dotenv()
+
+# Decodo proxy config (from account_health_checker.py)
 DECODO_USERNAME = os.getenv("DECODO_USERNAME", "sp5v4mxxv9")
 DECODO_PASSWORD = os.getenv("DECODO_PASSWORD", "ff9tilito8IEq9E_1Y")
 DECODO_HOST = os.getenv("DECODO_HOST", "isp.decodo.com")
 DECODO_PORTS_STR = os.getenv("DECODO_PORTS", "10001,10002,10003")
 DECODO_PORTS = [int(port.strip()) for port in DECODO_PORTS_STR.split(",")]
 
-# Import our rate limit debugger
-from rate_limit_debugger import RateLimitDebugger, setup_rate_limit_debugging
-
-# Use data directory for persistence in Docker
-DATA_DIR = os.getenv("DATA_DIR", ".")
-SESSION_FILE = os.path.join(DATA_DIR, "x_session.json")
-SESSION_FILE_BACKUP = os.path.join(DATA_DIR, "x_session_backup.json")
-TWEETS_FILE = os.path.join(DATA_DIR, "tweets.json")
-LAST_ID_FILE = os.path.join(DATA_DIR, "last_tweet_id.txt")
-MAX_TWEETS_HISTORY = 500  # Maximum number of tweets to keep in tweets.json
-
-# Global variable to track current Decodo proxy port index for rotation
-current_proxy_port_index = 0
-
-# Custom Exception for page load failures
-class PageLoadError(Exception):
-    pass
-
-# Decodo proxy functions
-def get_decodo_proxy_url(port_index=0):
-    """Get Decodo proxy URL for the specified port index (0-2)"""
-    port = DECODO_PORTS[port_index % len(DECODO_PORTS)]
-    return f"http://{DECODO_USERNAME}:{DECODO_PASSWORD}@{DECODO_HOST}:{port}"
-
-def check_decodo_connection(port_index=0):
-    """Check if Decodo proxy is working and return current IP"""
-    try:
-        # Test direct connection first
-        direct_response = requests.get('https://httpbin.org/ip', timeout=10)
-        direct_ip = direct_response.json().get('origin', 'Unknown')
-        
-        # Test Decodo proxy connection with increased timeout and retries
-        proxy_url = get_decodo_proxy_url(port_index)
-        decodo_proxies = {
-            'http': proxy_url,
-            'https': proxy_url
-        }
-        
-        # Try proxy connection with retries
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                proxy_response = requests.get('https://httpbin.org/ip', proxies=decodo_proxies, timeout=15)
-                proxy_ip = proxy_response.json().get('origin', 'Unknown')
-                
-                print(f"🌐 DIRECT IP: {direct_ip}")
-                print(f"🔗 DECODO PROXY IP (Port {DECODO_PORTS[port_index]}): {proxy_ip}")
-                
-                if direct_ip != proxy_ip:
-                    print(f"✅ DECODO: Proxy is working correctly on port {DECODO_PORTS[port_index]}")
-                    return True, proxy_ip
-                else:
-                    print(f"❌ DECODO: Proxy may not be working on port {DECODO_PORTS[port_index]} (same IP)")
-                    return False, direct_ip
-                    
-            except requests.exceptions.Timeout:
-                print(f"⏰ DECODO: Timeout on attempt {attempt + 1}/{max_retries} for port {DECODO_PORTS[port_index]}")
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(2)  # Wait before retry
-            except requests.exceptions.RequestException as e:
-                print(f"🔗 DECODO: Request error on attempt {attempt + 1}/{max_retries} for port {DECODO_PORTS[port_index]}: {e}")
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(2)  # Wait before retry
-            
-    except Exception as e:
-        print(f"❌ DECODO: Connection check failed for port {DECODO_PORTS[port_index]}: {e}")
-        return False, None
-
-def create_decodo_browser_context(pw_runtime, headless=True, account_type="backup", port_index=0):
-    """Create a browser context configured to use Decodo proxy"""
-    print(f"🔗 DECODO: Creating proxy-enabled browser for {account_type} account (Port {DECODO_PORTS[port_index]})")
-    
-    # Different user agents for different account types and ports
-    user_agents = {
-        "primary": [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-        ],
-        "backup": [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-        ]
+def get_random_proxy_config():
+    port = random.choice(DECODO_PORTS)
+    return {
+        "server": f"http://{DECODO_HOST}:{port}",
+        "username": DECODO_USERNAME,
+        "password": DECODO_PASSWORD
     }
-    
-    selected_agents = user_agents.get(account_type, user_agents["backup"])
-    # Use port_index to vary user agent selection
-    user_agent = selected_agents[(port_index + int(time.time())) % len(selected_agents)]
-    
-    try:
-        # Use proper proxy configuration (separate username/password)
-        proxy_config = {
-            "server": f"http://{DECODO_HOST}:{DECODO_PORTS[port_index]}",
-            "username": DECODO_USERNAME,
-            "password": DECODO_PASSWORD
-        }
-        
-        # Launch browser with improved args for proxy compatibility
-        browser = pw_runtime.chromium.launch(
-            headless=headless,
-            args=[
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--disable-gpu',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-features=IsolateOrigins,site-per-process',
-                '--disable-extensions',
-                '--disable-plugins',
-                '--disable-images' if account_type == "backup" else '',
-                '--memory-pressure-off',
-                '--max_old_space_size=4096'
-            ]
-        )
-        
-        # Create context with proxy-friendly settings
-        viewport_configs = {
-            "primary": {"width": 1920, "height": 1080},
-            "backup": [
-                {"width": 1366, "height": 768},
-                {"width": 1440, "height": 900},
-                {"width": 1280, "height": 720}
-            ]
-        }
-        
-        if account_type == "backup":
-            viewport = viewport_configs["backup"][port_index % len(viewport_configs["backup"])]
-        else:
-            viewport = viewport_configs["primary"]
-        
-        # Vary locale and timezone based on port for better fingerprinting
-        locales = ['en-US', 'en-GB', 'en-CA']
-        timezones = ['America/New_York', 'Europe/London', 'America/Toronto']
-        
-        selected_locale = locales[port_index % len(locales)]
-        selected_timezone = timezones[port_index % len(timezones)]
-        
-        # Create context with proper proxy configuration
-        context = browser.new_context(
-            proxy=proxy_config,  # Use proper proxy config here
-            viewport=viewport,
-            user_agent=user_agent,
-            locale=selected_locale,
-            timezone_id=selected_timezone,
-            ignore_https_errors=True,  # Help with proxy SSL issues
-            extra_http_headers={
-                'Accept-Language': f'{selected_locale.lower()},{selected_locale[:2]};q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Upgrade-Insecure-Requests': '1',
-            }
-        )
-        
-        # Add anti-detection script
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => false,
-            });
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5],
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en'],
-            });
-        """)
-        
-        print(f"🔗 DECODO: Browser created for {account_type} account with user agent: {user_agent[:50]}...")
-        print(f"🔗 DECODO: Using viewport {viewport['width']}x{viewport['height']}, locale {selected_locale}")
-        return browser, context
-        
-    except Exception as e:
-        print(f"❌ DECODO: Failed to create proxy browser for {account_type} on port {DECODO_PORTS[port_index]}: {e}")
-        return None, None
 
 def auto_login(existing_context=None):
     """Automatically login using credentials from environment variables"""
@@ -639,6 +481,10 @@ def save_tweet_to_db(tweet_data, conn):
             return False, conn
 
         # Print the raw tweet data for debugging
+        print(f"Tweet data for DB save (ID: {tweet_data['id']}):")
+        print(f"  - Text: {tweet_data['text'][:50]}...")
+        print(f"  - Raw user data: {tweet_data.get('user', {})}")
+
         # Extract username directly - Twitter API sometimes nests it differently
         username = None
         if 'user' in tweet_data:
@@ -650,9 +496,12 @@ def save_tweet_to_db(tweet_data, conn):
                 elif 'screen_name' in tweet_data:
                     username = tweet_data['screen_name']
 
-        # Only warn if username extraction completely fails
+        # Debug output for username
         if not username:
             print(f"WARNING: Username not found for tweet {tweet_data['id']}")
+            print(f"User data: {tweet_data.get('user', {})}")
+        else:
+            print(f"Found username for DB: {username}")
 
         with conn.cursor() as cur:
             # Handle date parsing with fallback
@@ -680,6 +529,8 @@ def save_tweet_to_db(tweet_data, conn):
             ON CONFLICT ("tweetId") DO NOTHING;
             """
             
+            print(f"Executing SQL with username: {username}")
+            
             cur.execute(sql, (
                 tweet_id,           # Add the generated UUID as the primary key
                 tweet_data['id'],
@@ -691,6 +542,7 @@ def save_tweet_to_db(tweet_data, conn):
                 None                # contentFingerprint (optional)
             ))
             conn.commit()
+            print(f"Successfully saved tweet {tweet_data['id']} to database with username: {username}")
             return True, conn
     except Exception as e:
         print(f"Error saving tweet {tweet_data.get('id')} to DB: {e}")
@@ -724,210 +576,18 @@ def save_tweet_to_db(tweet_data, conn):
                 pass
         return False, conn
 
-def save_cookies(context, session_file=None):
-    """Save cookies to specified file or default session file"""
-    file_path = session_file or SESSION_FILE
+def save_cookies(context):
     cookies = context.cookies()
-    with open(file_path, "w") as f:
+    with open(SESSION_FILE, "w") as f:
         json.dump(cookies, f)
 
-def load_cookies(context, session_file=None):
-    """Load cookies from specified file or default session file"""
-    file_path = session_file or SESSION_FILE
-    if os.path.exists(file_path):
-        with open(file_path, "r") as f:
+def load_cookies(context):
+    if os.path.exists(SESSION_FILE):
+        with open(SESSION_FILE, "r") as f:
             cookies = json.load(f)
         context.add_cookies(cookies)
         return True
     return False
-
-def auto_login_backup_account(existing_context=None):
-    """Automatically login using backup account credentials"""
-    load_dotenv()
-    email = os.getenv("X_EMAIL_BACKUP")
-    password = os.getenv("X_PASSWORD_BACKUP")
-    
-    if not email or not password:
-        print("X_EMAIL_BACKUP and X_PASSWORD_BACKUP environment variables are required for backup account")
-        return False
-    
-    print("\n=== Automatic X.com Backup Account Login ===")
-    print("Attempting to login with backup account...")
-    
-    try:
-        # Use existing context if provided, otherwise create new one
-        if existing_context:
-            context = existing_context
-            page = context.new_page()
-            should_close_page = True
-            browser = None
-        else:
-            pw = sync_playwright().start()
-            browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(
-                viewport={"width": 1024, "height": 768},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = context.new_page()
-            should_close_page = True
-        
-        # Clear any existing cookies first
-        if os.path.exists(SESSION_FILE_BACKUP):
-            os.remove(SESSION_FILE_BACKUP)
-            print("Removed existing backup session file.")
-        
-        print("Opening X.com login page for backup account...")
-        
-        try:
-            page.goto("https://x.com/login", timeout=30000)
-            print("Login page loaded. Filling in backup account credentials...")
-            
-            # Wait for and fill email/username field - try multiple selectors
-            email_filled = False
-            email_selectors = [
-                'input[name="text"]',
-                'input[autocomplete="username"]',
-                'input[data-testid="ocfEnterTextTextInput"]',
-                'input[placeholder*="email"]',
-                'input[placeholder*="username"]',
-                'input[type="text"]'
-            ]
-            
-            for selector in email_selectors:
-                try:
-                    page.wait_for_selector(selector, timeout=10000)  # Increased timeout
-                    page.fill(selector, email)
-                    print(f"Backup email filled using selector: {selector}")
-                    email_filled = True
-                    break
-                except Exception as e:
-                    print(f"Failed to find/fill selector {selector}: {e}")
-                    continue
-            
-            if not email_filled:
-                print("Could not find email input field for backup account")
-                return False
-            
-            # Click Next button - try multiple approaches
-            time.sleep(2)
-            next_clicked = False
-            next_approaches = [
-                lambda: page.locator('text="Next"').first.click(),
-                lambda: page.locator('[data-testid="LoginForm_Login_Button"]').click(),
-                lambda: page.locator('button:has-text("Next")').click(),
-                lambda: page.locator('div[role="button"]:has-text("Next")').click(),
-                lambda: page.locator('span:has-text("Next")').click()
-            ]
-            
-            for approach in next_approaches:
-                try:
-                    approach()
-                    print("Next button clicked for backup account")
-                    next_clicked = True
-                    break
-                except:
-                    continue
-            
-            if not next_clicked:
-                print("Could not click Next button for backup account")
-                return False
-            
-            time.sleep(3)
-            
-            # Wait for and fill password field - try multiple selectors
-            password_filled = False
-            password_selectors = [
-                'input[name="password"]',
-                'input[type="password"]',
-                'input[autocomplete="current-password"]',
-                'input[data-testid="ocfEnterTextTextInput"]'
-            ]
-            
-            for selector in password_selectors:
-                try:
-                    page.wait_for_selector(selector, timeout=5000)
-                    page.fill(selector, password)
-                    print(f"Backup password filled using selector: {selector}")
-                    password_filled = True
-                    break
-                except:
-                    continue
-            
-            if not password_filled:
-                print("Could not find password input field for backup account")
-                return False
-            
-            # Click Login button - try multiple approaches
-            time.sleep(2)
-            login_clicked = False
-            login_approaches = [
-                lambda: page.locator('text="Log in"').first.click(),
-                lambda: page.locator('[data-testid="LoginForm_Login_Button"]').click(),
-                lambda: page.locator('button:has-text("Log in")').click(),
-                lambda: page.locator('div[role="button"]:has-text("Log in")').click(),
-                lambda: page.locator('span:has-text("Log in")').click()
-            ]
-            
-            for approach in login_approaches:
-                try:
-                    approach()
-                    print("Login button clicked for backup account")
-                    login_clicked = True
-                    break
-                except:
-                    continue
-            
-            if not login_clicked:
-                print("Could not click Login button for backup account")
-                return False
-            
-            print("Backup account login button clicked. Waiting for authentication...")
-            
-            # Wait for successful login (check for home page elements)
-            try:
-                # Wait for navigation to complete and check for login success
-                page.wait_for_url("**/home", timeout=15000)
-                print("Successfully navigated to home page with backup account.")
-                
-                # Additional verification
-                if page.query_selector("[data-testid='SideNav_AccountSwitcher_Button']") or page.query_selector("[data-testid='tweet']"):
-                    print("Backup account login verification successful!")
-                    
-                    # Save cookies to backup session file
-                    save_cookies(context, SESSION_FILE_BACKUP)
-                    print("Backup account session saved successfully!")
-                    return True
-                else:
-                    print("Warning: Could not verify successful backup account login elements.")
-                    save_cookies(context, SESSION_FILE_BACKUP)
-                    return True
-                    
-            except PlaywrightTimeoutError:
-                print("Backup account login may have failed or requires additional verification (2FA, etc.)")
-                # Try to save session anyway in case login was successful but slow
-                save_cookies(context, SESSION_FILE_BACKUP)
-                return False
-                
-        except Exception as page_error:
-            print(f"Error during backup account login process: {page_error}")
-            return False
-        finally:
-            if should_close_page:
-                try:
-                    page.close()
-                except:
-                    pass
-            # Clean up browser and playwright if we created them
-            if browser:
-                try:
-                    browser.close()
-                    pw.stop()
-                except:
-                    pass
-                    
-    except Exception as e:
-        print(f"\nError during backup account auto-login: {e}")
-        return False
 
 def save_last_tweet_id(tweet_id):
     """Save the most recent tweet ID to file"""
@@ -951,6 +611,8 @@ def extract_tweet_metadata(tweet_content):
     if not tweet_id:
         return None
     
+    print(f"\nExtracting metadata for tweet ID: {tweet_id}")
+        
     legacy = tweet_content.get("legacy", {})
     tweet_text = legacy.get("full_text")
     
@@ -1062,6 +724,7 @@ def extract_tweet_metadata(tweet_content):
                 for match in screen_name_matches:
                     if match and match != "Unknown":
                         user_data["username"] = match
+                        print(f"Username found via fallback search: {match}")
                         break
     
     # Look for name field as well via regex if not found
@@ -1073,6 +736,7 @@ def extract_tweet_metadata(tweet_content):
                 for match in name_matches:
                     if match and match != "Unknown" and match != "":
                         user_data["name"] = match
+                        print(f"Name found via fallback search: {match}")
                         break
     
     # If we found a username in the legacy data but not in the user paths
@@ -1086,9 +750,11 @@ def extract_tweet_metadata(tweet_content):
         user_data["username"] = f"{generated_username}_user"
         print(f"Generated username from name: {user_data['username']}")
     
-    # Only print warnings if extraction completely fails
+    # Only print warnings if extraction failed
     if user_data["username"] == "Unknown" or user_data["username"] is None:
         print(f"WARNING: Could not extract username for tweet {tweet_id}")
+    if user_data["name"] == "Unknown" or user_data["name"] is None:
+        print(f"WARNING: Could not extract name for tweet {tweet_id}")
     
     tweet_data["user"] = user_data
     
@@ -1185,7 +851,7 @@ def _process_xhr_calls(xhr_calls, last_tweet_id, limit, seen_ids, current_tweets
             print(f"Error parsing XHR JSON: {e}")
     return newly_found_tweets_this_batch, newest_id_this_batch, False # Limit not reached
 
-def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, context_param=None, last_tweet_id=None, limit=None, is_backup_account=False):
+def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, context_param=None, last_tweet_id=None, limit=None):
     _xhr_calls_buffer = [] 
     all_new_tweets_metadata = []
     overall_newest_id = last_tweet_id
@@ -1210,7 +876,7 @@ def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, contex
         
         print(f"Navigating to {list_url}...")
         page.goto(list_url, timeout=30000)
-        page.wait_for_selector("[data-testid='cellInnerDiv']", timeout=25000) # Increased timeout for better reliability
+        page.wait_for_selector("[data-testid='cellInnerDiv']", timeout=15000) # Using 15000 as per user traceback
         print("Page content loaded.")
 
         for i in range(max_scrolls + 1):
@@ -1220,11 +886,28 @@ def scrape_list(list_url, max_scrolls=3, wait_time=1, browser_param=None, contex
                 time.sleep(wait_time)
             else:
                 print("Initial content check after page load...")
-                # Give more time for initial load, especially for backup account
-                initial_wait = max(wait_time, 3.0) if is_backup_account else max(wait_time, 1.5)
-                time.sleep(initial_wait)
+                time.sleep(max(wait_time, 1.5))
                 
-
+            # Debug XHR calls before processing
+            if _xhr_calls_buffer:
+                print(f"Found {len(_xhr_calls_buffer)} XHR calls to process")
+                for idx, xhr in enumerate(_xhr_calls_buffer[:3]):  # Log first 3 for debugging
+                    try:
+                        print(f"XHR {idx+1} URL: {xhr.url}")
+                        if "ListLatestTweetsTimeline" in xhr.url:
+                            xhr_data = xhr.json()
+                            # Check data structure for debugging
+                            data_keys = list(xhr_data.keys()) if isinstance(xhr_data, dict) else "Not a dict"
+                            print(f"XHR {idx+1} data keys: {data_keys}")
+                            
+                            # Try to find instructions
+                            if isinstance(xhr_data, dict) and 'data' in xhr_data:
+                                if 'list' in xhr_data['data']:
+                                    tweets_path = xhr_data.get('data', {}).get('list', {}).get('tweets_timeline', {})
+                                    if tweets_path:
+                                        print(f"Found tweets_timeline in response {idx+1}")
+                    except Exception as e:
+                        print(f"Error examining XHR {idx+1}: {e}")
             
             newly_processed_this_scroll, id_this_batch, limit_hit = _process_xhr_calls(
                 _xhr_calls_buffer, last_tweet_id, limit, seen_ids, all_new_tweets_metadata
@@ -1305,159 +988,13 @@ def trigger_tweet_analysis():
         print(f"Error triggering tweet analysis API: {e}")
         return False
 
-def switch_to_backup_account(pw_runtime, port_index=None):
-    """Initialize backup account browser and context using Decodo proxy for enhanced anonymity"""
-    load_dotenv()
-    backup_email = os.getenv("X_EMAIL_BACKUP")
-    backup_password = os.getenv("X_PASSWORD_BACKUP")
-    
-    # If no port_index specified, choose one based on time to rotate
-    if port_index is None:
-        port_index = int(time.time()) % len(DECODO_PORTS)
-    
-    print(f"\n🔄 ACCOUNT SWITCH: Initializing backup account ({backup_email})")
-    
-    if not backup_email or not backup_password:
-        print("❌ BACKUP ACCOUNT: Credentials not found in environment variables")
-        return None, None
-    
-    try:
-        # Try all proxy ports before falling back to no proxy
-        browser_backup = None
-        context_backup = None
-        
-        for attempt in range(len(DECODO_PORTS)):
-            current_port_index = (port_index + attempt) % len(DECODO_PORTS)
-            current_port = DECODO_PORTS[current_port_index]
-            
-            print(f"🔗 DECODO: Attempting proxy port {current_port} (attempt {attempt + 1}/{len(DECODO_PORTS)})")
-            
-            # Check proxy connection
-            proxy_working, proxy_ip = check_decodo_connection(current_port_index)
-            
-            if proxy_working:
-                print(f"✅ DECODO: Proxy connection verified on port {current_port}, using IP: {proxy_ip}")
-                print(f"🔗 DECODO: Creating proxy-enabled browser for backup account...")
-                
-                browser_backup, context_backup = create_decodo_browser_context(
-                    pw_runtime, 
-                    headless=True, 
-                    account_type="backup", 
-                    port_index=current_port_index
-                )
-                
-                if browser_backup and context_backup:
-                    print(f"✅ DECODO: Backup account browser created successfully on port {current_port}")
-                    break
-                else:
-                    print(f"❌ DECODO: Failed to create proxy browser on port {current_port}")
-                    if browser_backup:
-                        try:
-                            browser_backup.close()
-                        except:
-                            pass
-                    browser_backup = None
-                    context_backup = None
-            else:
-                print(f"❌ DECODO: Proxy connection failed on port {current_port}")
-        
-        # If all proxy ports failed, only then fall back to standard browser
-        if not browser_backup or not context_backup:
-            print("⚠️  DECODO: All proxy ports failed, falling back to standard browser")
-            print("🚨 WARNING: Backup account will use same IP as primary account!")
-            browser_backup, context_backup = create_standard_backup_browser(pw_runtime, port_index)
-        
-        if not browser_backup or not context_backup:
-            print("❌ BACKUP ACCOUNT: Failed to create browser/context")
-            return None, None
-        
-        # Try to load existing backup session first
-        print(f"🔍 BACKUP ACCOUNT: Checking for existing session ({backup_email})")
-        if load_cookies(context_backup, SESSION_FILE_BACKUP):
-            print(f"✅ BACKUP ACCOUNT: Loaded existing session for {backup_email}")
-            return browser_backup, context_backup
-        else:
-            print(f"❌ BACKUP ACCOUNT: No existing session found for {backup_email}")
-            print(f"🔄 BACKUP ACCOUNT: Attempting automatic login for {backup_email}...")
-            if auto_login_backup_account(context_backup):
-                print(f"✅ BACKUP ACCOUNT: Login successful for {backup_email}")
-                return browser_backup, context_backup
-            else:
-                print(f"❌ BACKUP ACCOUNT: Login failed for {backup_email}")
-                browser_backup.close()
-                return None, None
-                
-    except Exception as e:
-        print(f"❌ BACKUP ACCOUNT: Error during switch - {e}")
-        return None, None
-
-def create_standard_backup_browser(pw_runtime, port_index=0):
-    """Create a standard backup browser without proxy as fallback"""
-    print("🔄 BACKUP ACCOUNT: Creating standard browser with different fingerprint...")
-    
-    try:
-        # Use different browser args for backup
-        browser_backup = pw_runtime.chromium.launch(
-            headless=True,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--disable-features=IsolateOrigins,site-per-process',
-            ]
-        )
-        
-        # Vary user agent based on port_index for different fingerprints
-        backup_user_agents = [
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-        ]
-        
-        backup_user_agent = backup_user_agents[port_index % len(backup_user_agents)]
-        
-        # Vary viewport based on port_index
-        viewports = [
-            {"width": 1366, "height": 768},
-            {"width": 1440, "height": 900},
-            {"width": 1280, "height": 720}
-        ]
-        
-        viewport = viewports[port_index % len(viewports)]
-        
-        # Create context with varied settings
-        context_backup = browser_backup.new_context(
-            viewport=viewport,
-            user_agent=backup_user_agent
-        )
-        
-        # Add minimal anti-detection script
-        context_backup.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => false,
-            });
-        """)
-        
-        print(f"🔧 BACKUP FINGERPRINT: Using {backup_user_agent[:50]}...")
-        print(f"🔧 BACKUP FINGERPRINT: Viewport {viewport['width']}x{viewport['height']}")
-        
-        return browser_backup, context_backup
-        
-    except Exception as e:
-        print(f"❌ BACKUP ACCOUNT: Failed to create standard browser: {e}")
-        return None, None
-
-
-
-def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_time=1, headless=True, limit=None, max_consecutive_errors=3, max_history=MAX_TWEETS_HISTORY):
+def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_time=1, headless=True, limit=None, max_consecutive_errors=5, max_history=MAX_TWEETS_HISTORY):
     """Monitor Twitter list for new tweets with rate limiting protection."""
     last_tweet_id = load_last_tweet_id()
     all_tweets_ever_saved_json = [] # For tweets.json cache/backup
     consecutive_error_count = 0
     base_wait_time = interval # Store the original interval for normal operation
     current_wait_time = base_wait_time # This will change during backoff
-    
-    # Initialize rate limit debugger
-    debugger = RateLimitDebugger()
-    print("🔍 RATE LIMIT DEBUGGER: Initialized - will capture all rate limit events")
 
     if os.path.exists(TWEETS_FILE):
         try:
@@ -1467,7 +1004,6 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     all_tweets_ever_saved_json = saved_data["tweets"]
                 elif isinstance(saved_data, list): # Handle old format if present
                     all_tweets_ever_saved_json = saved_data
-                    
                 # Trim history if it exceeds the maximum limit
                 if len(all_tweets_ever_saved_json) > max_history:
                     print(f"Tweets history exceeds limit ({len(all_tweets_ever_saved_json)} > {max_history}). Trimming to most recent {max_history} tweets.")
@@ -1475,67 +1011,35 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
         except Exception as e:
             print(f"Error loading existing tweets file ({TWEETS_FILE}): {e}. Starting fresh.")
             all_tweets_ever_saved_json = []
-    
+
     pw_runtime = None 
     browser_monitor = None
     context_monitor = None
     
     # Initialize browser before main loop
-    pw_runtime, browser_monitor, context_monitor = initialize_browser(headless, "primary")
-    
-    # Initialize backup browser components (will be created when needed)
-    browser_monitor_backup = None
-    context_monitor_backup = None
+    pw_runtime, browser_monitor, context_monitor = initialize_browser(headless, use_proxy=True)
     
     session_available = False
-    backup_session_available = False
-    using_backup_account = False
-    
     try:
-        # Load environment variables to check account info
-        load_dotenv()
-        primary_email = os.getenv("X_EMAIL")
-        backup_email = os.getenv("X_EMAIL_BACKUP")
-        
-        print(f"\n=== Account Configuration ===")
-        print(f"Primary account: {primary_email if primary_email else 'Not configured'}")
-        print(f"Backup account:  {backup_email if backup_email else 'Not configured'}")
-        print("=" * 30)
-        
         if load_cookies(context_monitor):
             session_available = True
-            print(f"✅ PRIMARY ACCOUNT SESSION: Valid session found for {primary_email}")
-            print("🔄 Using PRIMARY account for monitoring")
-            # Setup debugging hooks for primary account
-            setup_rate_limit_debugging(context_monitor, debugger)
+            print("Valid session found. Using full browser-based monitoring.")
         else:
-            print(f"❌ PRIMARY ACCOUNT SESSION: No valid session found for {primary_email}")
-            print("🔄 Attempting automatic login for PRIMARY account...")
+            print("No valid session found. Attempting automatic login...")
             # Try automatic login using existing context
             if auto_login(context_monitor):
-                print("✅ PRIMARY ACCOUNT LOGIN: Automatic login successful!")
+                print("Automatic login successful! Reloading session...")
                 # Reload cookies after successful auto-login
                 if load_cookies(context_monitor):
                     session_available = True
-                    print("✅ PRIMARY ACCOUNT SESSION: Session loaded successfully")
-                    print("🔄 Using PRIMARY account for monitoring")
+                    print("Session loaded successfully. Using full browser-based monitoring.")
                 else:
-                    print("⚠️  PRIMARY ACCOUNT WARNING: Auto-login succeeded but session reload failed")
-                    session_available = False
+                    print("Warning: Auto-login succeeded but session reload failed.")
+                    print("Monitoring will not proceed without a valid session.")
+                    return
             else:
-                print("❌ PRIMARY ACCOUNT LOGIN: Automatic login failed")
-                session_available = False
-        
-        # Check if backup account credentials are available
-        if backup_email:
-            print(f"✅ BACKUP ACCOUNT: Credentials detected for {backup_email}")
-            print("🔄 Backup account will be used for rate limit mitigation")
-        else:
-            print("❌ BACKUP ACCOUNT: No credentials found")
-            print("💡 Add X_EMAIL_BACKUP and X_PASSWORD_BACKUP to .env for better rate limit handling")
-        
-        print("=" * 50)
-        
+                print("Automatic login failed. Monitoring will not proceed without a valid session.")
+                return
         print(f"Starting real-time monitoring of {list_url}")
         print(f"Checking for new tweets every {interval} seconds")
         if limit:
@@ -1547,114 +1051,36 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
             start_time_cycle = time.time()
             try:
                 print(f"\n[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking for new tweets...")
-                
                 newly_scraped_tweets = []
                 newest_id_from_scrape = None
-                
-                if session_available and not using_backup_account:
-                    # Try browser-based scraping with primary account
-                    print(f"🔄 SCRAPING: Using PRIMARY account ({primary_email})")
-                    newly_scraped_tweets, newest_id_from_scrape = scrape_list(
-                        list_url, 
-                        max_scrolls=max_scrolls, 
-                        wait_time=wait_time,
-                        browser_param=browser_monitor,
-                        context_param=context_monitor,
-                        last_tweet_id=last_tweet_id,
-                        limit=limit
-                    )
-                    consecutive_error_count = 0
-                    current_wait_time = base_wait_time
-                    print(f"✅ PRIMARY ACCOUNT: Successful request. Resuming normal interval of {current_wait_time} seconds.")
-                elif using_backup_account and browser_monitor_backup and context_monitor_backup:
-                    # Continue using backup account with different timing
-                    print(f"🔄 SCRAPING: Using BACKUP account ({backup_email})")
-                    
-                    # Use different timing patterns for backup account
-                    backup_max_scrolls = max(1, max_scrolls - 1)  # Fewer scrolls
-                    backup_wait_time = wait_time * random.uniform(1.5, 2.5)  # Longer waits
-                    
-                    newly_scraped_tweets, newest_id_from_scrape = scrape_list(
-                        list_url, 
-                        max_scrolls=backup_max_scrolls, 
-                        wait_time=backup_wait_time,
-                        browser_param=browser_monitor_backup,
-                        context_param=context_monitor_backup,
-                        last_tweet_id=last_tweet_id,
-                        limit=limit,
-                        is_backup_account=True
-                    )
-                    
-                    if newly_scraped_tweets:
-                        consecutive_error_count = 0
-                        current_wait_time = base_wait_time
-                        print(f"✅ BACKUP ACCOUNT: Successful request. Found {len(newly_scraped_tweets)} tweets.")
-                    else:
-                        print("⚠️  BACKUP ACCOUNT: No tweets found.")
-                else:
-                    # No session available, try to switch to backup account
-                    print(f"❌ PRIMARY ACCOUNT: No session available for {primary_email}")
-                    print(f"🔄 SWITCHING: Attempting to switch to backup account ({backup_email})...")
-                    global current_proxy_port_index
-                    browser_monitor_backup, context_monitor_backup = switch_to_backup_account(pw_runtime, current_proxy_port_index)
-                    
-                    if browser_monitor_backup and context_monitor_backup:
-                        print(f"✅ BACKUP ACCOUNT: Successfully switched to {backup_email}")
-                        using_backup_account = True
-                        
-                        # Try scraping with backup account using different timing
-                        print(f"🔄 SCRAPING: Using BACKUP account ({backup_email})")
-                        
-                        # Use different timing patterns for backup account
-                        backup_max_scrolls = max(1, max_scrolls - 1)  # Fewer scrolls
-                        backup_wait_time = wait_time * random.uniform(1.5, 2.5)  # Longer waits
-                        
-                        newly_scraped_tweets, newest_id_from_scrape = scrape_list(
-                            list_url, 
-                            max_scrolls=backup_max_scrolls, 
-                            wait_time=backup_wait_time,
-                            browser_param=browser_monitor_backup,
-                            context_param=context_monitor_backup,
-                            last_tweet_id=last_tweet_id,
-                            limit=limit,
-                            is_backup_account=True
-                        )
-                        
-                        if newly_scraped_tweets:
-                            consecutive_error_count = 0
-                            current_wait_time = base_wait_time
-                            print(f"✅ BACKUP ACCOUNT: Successful request. Found {len(newly_scraped_tweets)} tweets.")
-                        else:
-                            print("⚠️  BACKUP ACCOUNT: No tweets found.")
-                    else:
-                        print(f"❌ BACKUP ACCOUNT: Failed to switch to {backup_email}")
-                        print("🚫 NO ACCOUNTS AVAILABLE: No tweets will be scraped this cycle.")
-                        newly_scraped_tweets = []
-                        newest_id_from_scrape = None
-            
+                # Only browser-based scraping
+                newly_scraped_tweets, newest_id_from_scrape = scrape_list(
+                    list_url, 
+                    max_scrolls=max_scrolls, 
+                    wait_time=wait_time,
+                    browser_param=browser_monitor,
+                    context_param=context_monitor,
+                    last_tweet_id=last_tweet_id,
+                    limit=limit
+                )
+                consecutive_error_count = 0
+                current_wait_time = base_wait_time
+                print(f"Successful browser request. Resuming normal interval of {current_wait_time} seconds.")
                 if newest_id_from_scrape and (last_tweet_id is None or int(newest_id_from_scrape) > int(last_tweet_id)):
                     last_tweet_id = newest_id_from_scrape
                     save_last_tweet_id(last_tweet_id)
-                
                 if newly_scraped_tweets:
                     print(f"Found {len(newly_scraped_tweets)} new tweets this cycle!")
-                    
-                    # Mark successful scraping for rate limit debugging
-                    current_account_email = primary_email if not using_backup_account else backup_email
-                    debugger.mark_success(current_account_email or "unknown")
-                    
                     existing_ids_json = {tweet["id"] for tweet in all_tweets_ever_saved_json}
                     unique_new_tweets_to_add_json = [
                         tweet for tweet in newly_scraped_tweets if tweet["id"] not in existing_ids_json
                     ]
                     all_tweets_ever_saved_json = unique_new_tweets_to_add_json + all_tweets_ever_saved_json
                     all_tweets_ever_saved_json.sort(key=lambda x: int(x.get("id", 0)), reverse=True)
-
                     # Now trim to max_history if needed
                     if len(all_tweets_ever_saved_json) > max_history:
                         all_tweets_ever_saved_json = all_tweets_ever_saved_json[:max_history]
                         print(f"Trimmed tweets history to {max_history} most recent tweets.")
-
                     output_data_json = {
                         "tweets": all_tweets_ever_saved_json,
                         "meta": {
@@ -1665,7 +1091,6 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     }
                     with open(TWEETS_FILE, "w") as f_json:
                         json.dump(output_data_json, f_json, indent=2)
-                    
                     saved_to_db_count = 0
                     if db_conn:
                         print(f"Saving {len(newly_scraped_tweets)} tweets to DB...")
@@ -1674,96 +1099,42 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                             if success:
                                 saved_to_db_count += 1
                         print(f"Successfully saved {saved_to_db_count} new tweets to the database.")
-                    
                         if saved_to_db_count > 0:
                             print("Triggering tweet analysis API...")
                             trigger_tweet_analysis()
                     else:
                         print(f"Found {len(newly_scraped_tweets)} tweets (DB connection not available).")
-                    
                     for tweet in newly_scraped_tweets: 
                         username = tweet.get("user", {}).get("username", "Unknown")
                         text = tweet.get("text", "").replace("\n", " ")
                         print(f"@{username}: {text[:70]}{'...' if len(text) > 70 else ''}")
                 else:
                     print("No new tweets found this cycle.")
-
             except PageLoadError as ple:
-                current_account = "PRIMARY" if not using_backup_account else "BACKUP"
-                current_email = primary_email if not using_backup_account else backup_email
-                current_context = context_monitor if not using_backup_account else context_monitor_backup
-                
-                print(f"🚫 {current_account} ACCOUNT ERROR: Page load/scrape error for {current_email}")
-                print(f"   Error details: {ple}")
-                
-                # CAPTURE RATE LIMIT EVENT FOR DEBUGGING
-                error_type = "timeout" if "timeout" in str(ple).lower() or "wait_for_selector" in str(ple).lower() else "page_load_error"
-                debugger.capture_rate_limit_event(
-                    context=current_context,
-                    account_name=current_email or "unknown",
-                    account_type=current_account.lower(),
-                    url=list_url,
-                    error_type=error_type,
-                    error_message=str(ple)
-                )
-                
+                print(f"Page load/scrape error during cycle: {ple}")
                 consecutive_error_count += 1
                 current_wait_time = min(1800, base_wait_time * (2 ** consecutive_error_count))
-                
-                if "timeout" in str(ple).lower() or "wait_for_selector" in str(ple).lower():
-                    print(f"⏰ RATE LIMIT DETECTED: {current_account} account ({current_email}) appears to be rate limited")
-                    print(f"🔄 BACKOFF STRATEGY: Implementing exponential backoff: {current_wait_time} seconds")
-                else:
-                    print(f"🚫 {current_account} ACCOUNT: Generic page load error")
-                    print(f"🔄 BACKOFF STRATEGY: Implementing backoff: {current_wait_time} seconds")
-                
+                print(f"Possible rate limiting detected. Implementing backoff: {current_wait_time} seconds.")
                 if consecutive_error_count >= 3:
-                    if not using_backup_account:
-                        print(f"🔄 SWITCHING STRATEGY: Multiple errors with PRIMARY account ({primary_email})")
-                        print("🔄 Attempting to switch to backup account...")
-                        
-                        # Try to switch to backup account
-                        if backup_email:
-                            # Rotate to next proxy port for better rate limit avoidance
-                            current_proxy_port_index = (current_proxy_port_index + 1) % len(DECODO_PORTS)
-                            print(f"🔄 PROXY ROTATION: Switching to port {DECODO_PORTS[current_proxy_port_index]}")
-                            browser_monitor_backup, context_monitor_backup = switch_to_backup_account(pw_runtime, current_proxy_port_index)
-                            if browser_monitor_backup and context_monitor_backup:
-                                using_backup_account = True
-                                consecutive_error_count = 0  # Reset error count for backup account
-                                current_wait_time = base_wait_time
-                                print(f"✅ ACCOUNT SWITCH: Successfully switched to backup account ({backup_email})")
-                            else:
-                                print(f"❌ ACCOUNT SWITCH: Failed to switch to backup account ({backup_email})")
-                        else:
-                            print("❌ NO BACKUP: No backup account available for switching")
+                    print("Multiple consecutive errors. Reinitializing browser and rotating proxy...")
+                    try:
+                        if browser_monitor: browser_monitor.close()
+                        if pw_runtime: pw_runtime.stop()
+                    except Exception as e_cleanup: print(f"Error during browser cleanup: {e_cleanup}")
+                    time.sleep(5)
+                    pw_runtime, browser_monitor, context_monitor = initialize_browser(headless, use_proxy=True)
+                    if load_cookies(context_monitor):
+                        session_available = True
+                        print("Browser reinitialized with fresh session and new proxy.")
                     else:
-                        print(f"🔄 BROWSER RESET: Multiple errors with BACKUP account ({backup_email})")
-                        print("🔄 Reinitializing backup browser...")
-                        try:
-                            if browser_monitor_backup: browser_monitor_backup.close()
-                        except Exception as e_cleanup: 
-                            print(f"Error during backup browser cleanup: {e_cleanup}")
-                        
-                        time.sleep(5)
-                        # Rotate to next proxy port for backup account reset
-                        current_proxy_port_index = (current_proxy_port_index + 1) % len(DECODO_PORTS)
-                        print(f"🔄 BACKUP RESET: Switching to port {DECODO_PORTS[current_proxy_port_index]}")
-                        browser_monitor_backup, context_monitor_backup = switch_to_backup_account(pw_runtime, current_proxy_port_index)
-                        if browser_monitor_backup and context_monitor_backup:
-                            print(f"✅ BACKUP RESET: Successfully reinitialized backup account ({backup_email})")
-                        else:
-                            print(f"❌ BACKUP RESET: Failed to reinitialize backup account ({backup_email})")
-                            using_backup_account = False
-                
+                        session_available = False
+                        print("Browser reinitialized but no valid session - monitoring will not proceed.")
+                        return
                 if consecutive_error_count >= max_consecutive_errors:
-                    print(f"🚫 MAX ERRORS REACHED: {consecutive_error_count}/{max_consecutive_errors} consecutive errors")
-                    print(f"⏰ EXTENDED BACKOFF: Backing off for {current_wait_time} seconds before trying again")
-                    print("💡 This is NOT fatal - monitoring will continue after backoff period")
+                    print(f"Reached maximum consecutive errors ({max_consecutive_errors}). This is NOT fatal - will continue after backoff period.")
+                    print(f"Backing off for {current_wait_time} seconds before trying again...")
                 else:
-                    print(f"⚠️  ERROR COUNT: {consecutive_error_count}/{max_consecutive_errors} consecutive errors")
-                    print(f"⏰ BACKOFF: Waiting {current_wait_time} seconds before retry")
-            
+                    print(f"Consecutive errors: {consecutive_error_count}/{max_consecutive_errors}. Backing off for {current_wait_time} seconds.")
             except Exception as e_cycle:
                 print(f"Unexpected error during scraping cycle: {e_cycle}")
                 consecutive_error_count += 1
@@ -1773,27 +1144,11 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     print(f"This is NOT fatal - will continue after a {current_wait_time} second backoff period.")
                 else:
                     print(f"Consecutive errors: {consecutive_error_count}/{max_consecutive_errors}. Will wait {current_wait_time} seconds.")
-            
-            # Calculate wait time and sleep
+            # Wait for next cycle
             elapsed_cycle = time.time() - start_time_cycle
             actual_wait_time = max(1, current_wait_time - elapsed_cycle)
-            
-            # Periodic rate limit analysis (every 10 cycles or when we have errors)
-            cycle_count = getattr(monitor_list_real_time, 'cycle_count', 0) + 1
-            monitor_list_real_time.cycle_count = cycle_count
-            
-            if cycle_count % 10 == 0 or consecutive_error_count > 0:
-                if debugger.events:
-                    print(f"\n🔍 PERIODIC ANALYSIS: Cycle {cycle_count} - {len(debugger.events)} rate limit events captured")
-                    analysis = debugger.analyze_patterns()
-                    if analysis.get("recommendations"):
-                        print("💡 Current recommendations:")
-                        for rec in analysis["recommendations"][:2]:  # Show top 2 recommendations
-                            print(f"   {rec}")
-            
             print(f"Waiting {int(actual_wait_time)} seconds before next check...")
             time.sleep(actual_wait_time)
-            
     except KeyboardInterrupt:
         print("\nMonitoring stopped by user. Cleaning up resources...")
     except Exception as e_monitor: # Catches errors from setup
@@ -1804,7 +1159,6 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                 close_db_connection_safely(db_conn)
             except Exception as e_db_close:
                 print(f"Error closing database connection: {e_db_close}")
-        
         if browser_monitor:
             try:
                 print("Shutting down browser...")
@@ -1817,7 +1171,6 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                 print("Browser closed.")
             except Exception as e_close_browser_mon:
                 print(f"Non-fatal error closing browser: {e_close_browser_mon}")
-        
         if pw_runtime:
             try:
                 print("Stopping Playwright...")
@@ -1825,48 +1178,44 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                 print("Playwright stopped.")
             except Exception as e_stop_pw_mon:
                 print(f"Non-fatal error stopping Playwright: {e_stop_pw_mon}")
-        
-        # Clean up backup browser resources if they exist
-        if browser_monitor_backup:
-            try:
-                print("Shutting down backup browser...")
-                browser_monitor_backup.close()
-                print("Backup browser closed.")
-            except Exception as e_close_backup:
-                print(f"Non-fatal error closing backup browser: {e_close_backup}")
-        
         print("Monitoring ended.")
 
-def initialize_browser(headless=True, account_suffix=""):
-    """Initialize a browser and return the components."""
-    print(f"Initializing Playwright and browser{' for ' + account_suffix if account_suffix else ''}...")
+def initialize_browser(headless=True, use_proxy=True):
+    """Initialize a browser with a random user agent and return the components. Optionally use Decodo proxy."""
+    print("Initializing Playwright and browser...")
     pw_runtime = sync_playwright().start()
     
-    # Standard browser initialization for primary account
+    # Create browser with custom user agent to reduce detection
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ]
-    
-    # Select a random user agent
     selected_user_agent = user_agents[int(time.time()) % len(user_agents)]
-    
+
     browser = pw_runtime.chromium.launch(
         headless=headless,
         args=[
-            '--disable-blink-features=AutomationControlled',  # Hide automation
-            '--disable-features=IsolateOrigins,site-per-process',  # Improve stability
+            '--disable-blink-features=AutomationControlled',
+            '--disable-features=IsolateOrigins,site-per-process',
         ]
     )
-    
-    context = browser.new_context(
-        viewport={"width": 1920, "height": 1080},
-        user_agent=selected_user_agent
-    )
-    
-    # Make the browser more human-like
+
+    proxy_config = get_random_proxy_config() if use_proxy else None
+    if proxy_config:
+        print(f"Using Decodo proxy: {proxy_config['server']}")
+        context = browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent=selected_user_agent,
+            proxy=proxy_config
+        )
+    else:
+        context = browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent=selected_user_agent
+        )
+
     context.add_init_script("""
         Object.defineProperty(navigator, 'webdriver', {
             get: () => false,
@@ -1875,8 +1224,7 @@ def initialize_browser(headless=True, account_suffix=""):
             get: () => [1, 2, 3, 4, 5],
         });
     """)
-    
-    print(f"Browser initialized{' for ' + account_suffix if account_suffix else ''} with user agent: {selected_user_agent}")
+    print(f"Browser initialized with user agent: {selected_user_agent}")
     return pw_runtime, browser, context
 
 if __name__ == "__main__":
@@ -1900,8 +1248,6 @@ if __name__ == "__main__":
     parser.add_argument("--max-errors", type=int, default=5, help="Max consecutive errors before stopping monitor")
     parser.add_argument("--max-history", type=int, default=MAX_TWEETS_HISTORY,
                        help=f"Maximum number of tweets to keep in history (default: {MAX_TWEETS_HISTORY})")
-    parser.add_argument("--use-backup", action="store_true",
-                       help="Enable backup account for rate limit mitigation (requires X_EMAIL_BACKUP and X_PASSWORD_BACKUP in .env)")
     
     args = parser.parse_args()
     
