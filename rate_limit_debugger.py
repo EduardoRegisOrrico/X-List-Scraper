@@ -66,8 +66,24 @@ class RateLimitDebugger:
         except Exception as e:
             print(f"Error saving events: {e}")
     
-    def get_current_ip(self) -> str:
-        """Get current external IP address"""
+    def get_current_ip(self, context=None) -> str:
+        """Get current external IP address, preferably through browser context"""
+        # Try to get IP through browser context first (respects proxy)
+        if context:
+            try:
+                page = context.new_page()
+                page.goto('https://httpbin.org/ip', timeout=10000)
+                ip_data = page.evaluate('() => JSON.parse(document.body.innerText)')
+                page.close()
+                return ip_data.get('origin', 'unknown')
+            except Exception as e:
+                try:
+                    page.close()
+                except:
+                    pass
+                print(f"Warning: Could not get IP through browser context: {e}")
+        
+        # Fallback to direct request (won't respect proxy)
         try:
             response = requests.get('https://httpbin.org/ip', timeout=5)
             return response.json().get('origin', 'unknown')
@@ -127,7 +143,7 @@ class RateLimitDebugger:
         
         # Get network info
         network_info = {
-            "ip_address": self.get_current_ip(),
+            "ip_address": self.get_current_ip(context),
             "timestamp": current_time,
             "url_accessed": url
         }

@@ -52,25 +52,40 @@ def check_decodo_connection(port_index=0):
         direct_response = requests.get('https://httpbin.org/ip', timeout=10)
         direct_ip = direct_response.json().get('origin', 'Unknown')
         
-        # Test Decodo proxy connection
+        # Test Decodo proxy connection with increased timeout and retries
         proxy_url = get_decodo_proxy_url(port_index)
         decodo_proxies = {
             'http': proxy_url,
             'https': proxy_url
         }
         
-        proxy_response = requests.get('https://httpbin.org/ip', proxies=decodo_proxies, timeout=10)
-        proxy_ip = proxy_response.json().get('origin', 'Unknown')
-        
-        print(f"🌐 DIRECT IP: {direct_ip}")
-        print(f"🔗 DECODO PROXY IP (Port {DECODO_PORTS[port_index]}): {proxy_ip}")
-        
-        if direct_ip != proxy_ip:
-            print(f"✅ DECODO: Proxy is working correctly on port {DECODO_PORTS[port_index]}")
-            return True, proxy_ip
-        else:
-            print(f"❌ DECODO: Proxy may not be working on port {DECODO_PORTS[port_index]} (same IP)")
-            return False, direct_ip
+        # Try proxy connection with retries
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                proxy_response = requests.get('https://httpbin.org/ip', proxies=decodo_proxies, timeout=15)
+                proxy_ip = proxy_response.json().get('origin', 'Unknown')
+                
+                print(f"🌐 DIRECT IP: {direct_ip}")
+                print(f"🔗 DECODO PROXY IP (Port {DECODO_PORTS[port_index]}): {proxy_ip}")
+                
+                if direct_ip != proxy_ip:
+                    print(f"✅ DECODO: Proxy is working correctly on port {DECODO_PORTS[port_index]}")
+                    return True, proxy_ip
+                else:
+                    print(f"❌ DECODO: Proxy may not be working on port {DECODO_PORTS[port_index]} (same IP)")
+                    return False, direct_ip
+                    
+            except requests.exceptions.Timeout:
+                print(f"⏰ DECODO: Timeout on attempt {attempt + 1}/{max_retries} for port {DECODO_PORTS[port_index]}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(2)  # Wait before retry
+            except requests.exceptions.RequestException as e:
+                print(f"🔗 DECODO: Request error on attempt {attempt + 1}/{max_retries} for port {DECODO_PORTS[port_index]}: {e}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(2)  # Wait before retry
             
     except Exception as e:
         print(f"❌ DECODO: Connection check failed for port {DECODO_PORTS[port_index]}: {e}")
