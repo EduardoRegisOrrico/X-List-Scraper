@@ -98,15 +98,24 @@ def create_decodo_browser_context(pw_runtime, headless=True, account_type="backu
     user_agent = selected_agents[(port_index + int(time.time())) % len(selected_agents)]
     
     try:
-        proxy_url = get_decodo_proxy_url(port_index)
+        # Use proper proxy configuration (separate username/password)
+        proxy_config = {
+            "server": f"http://{DECODO_HOST}:{DECODO_PORTS[port_index]}",
+            "username": DECODO_USERNAME,
+            "password": DECODO_PASSWORD
+        }
         
-        # Launch browser with Decodo proxy configuration
+        # Launch browser with improved args for proxy compatibility
         browser = pw_runtime.chromium.launch(
             headless=headless,
-            proxy={
-                "server": proxy_url
-            },
             args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-gpu',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--disable-extensions',
@@ -139,11 +148,14 @@ def create_decodo_browser_context(pw_runtime, headless=True, account_type="backu
         selected_locale = locales[port_index % len(locales)]
         selected_timezone = timezones[port_index % len(timezones)]
         
+        # Create context with proper proxy configuration
         context = browser.new_context(
+            proxy=proxy_config,  # Use proper proxy config here
             viewport=viewport,
             user_agent=user_agent,
             locale=selected_locale,
             timezone_id=selected_timezone,
+            ignore_https_errors=True,  # Help with proxy SSL issues
             extra_http_headers={
                 'Accept-Language': f'{selected_locale.lower()},{selected_locale[:2]};q=0.9',
                 'Accept-Encoding': 'gzip, deflate, br',
