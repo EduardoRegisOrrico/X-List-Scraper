@@ -42,7 +42,6 @@ def get_db_connection():
                     options.append(f'search_path={schema_name},public')
             
             # Add IPv4 address family preference for better connection stability
-            options.append('addr_type=ipv4')
             
             if options:
                 conn_params['options'] = f"-c {' -c '.join(options)}"
@@ -71,7 +70,6 @@ def get_db_connection():
                     }
                     
                     # Handle schema if present in query
-                    options = ['addr_type=ipv4']
                     if 'schema' in parsed_url.query:
                         schema_name = parsed_url.query.split('schema=')[-1].split('&')[0]
                         options.append(f'search_path={schema_name},public')

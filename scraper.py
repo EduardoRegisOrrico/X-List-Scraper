@@ -333,7 +333,6 @@ def get_db_connection():
                     options.append(f'search_path={schema_name},public')
             
             # Remove IPv4 address family preference as it's not supported
-            # options.append('addr_type=ipv4')
             
             if options:
                 conn_params['options'] = f"-c {' -c '.join(options)}"
@@ -368,7 +367,6 @@ def get_db_connection():
                         options.append(f'search_path={schema_name},public')
                     
                     # Remove IPv4 address family preference as it's not supported
-                    # options.append('addr_type=ipv4')
                     
                     conn_params['options'] = f"-c {' -c '.join(options)}"
                 else:

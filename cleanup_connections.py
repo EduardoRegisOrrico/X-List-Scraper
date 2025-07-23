@@ -37,7 +37,6 @@ def get_db_params():
                 options.append(f'search_path={schema_name},public')
         
         # Add IPv4 address family preference for better connection stability
-        options.append('addr_type=ipv4')
         
         if options:
             conn_params['options'] = f"-c {' -c '.join(options)}"
@@ -76,7 +75,6 @@ def get_db_params():
             options.append(f'search_path={schema_name},public')
         
         # Add IPv4 address family preference
-        options.append('addr_type=ipv4')
         
         if options:
             conn_params['options'] = f"-c {' -c '.join(options)}"
