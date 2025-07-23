@@ -1126,6 +1126,9 @@ def monitor_list_real_time(db_conn, list_url, interval=60, max_scrolls=3, wait_t
                     if load_cookies(context_monitor):
                         session_available = True
                         print("Browser reinitialized with fresh session and new proxy.")
+                        print("Resetting backoff counter after IP/browser switch.")
+                        consecutive_error_count = 0
+                        current_wait_time = base_wait_time
                     else:
                         session_available = False
                         print("Browser reinitialized but no valid session - monitoring will not proceed.")
