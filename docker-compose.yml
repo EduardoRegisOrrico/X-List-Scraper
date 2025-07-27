@@ -29,7 +29,7 @@ services:
     command: >
       python scraper.py
       --url "https://x.com/i/lists/1919380958723158457"
-      --interval 4
+      --interval 8
       --scrolls 3
       --limit 10
 
