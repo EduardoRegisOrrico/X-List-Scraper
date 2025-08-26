@@ -30,12 +30,13 @@ ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV DATA_DIR=/app/data
 
-# Health check - improved to check both DB and proxy connections
+# Health check - check DB connection and basic proxy config
 HEALTHCHECK --interval=30s --timeout=15s --start-period=10s --retries=3 \
-    CMD python -c "from scraper import get_db_connection, check_decodo_connection; \
+    CMD python -c "from get_db_connection import get_db_connection; \
+                   from scraper import get_random_proxy_config; \
                    conn = get_db_connection(); \
-                   proxy_ok, _ = check_decodo_connection(0); \
-                   exit(0 if conn and proxy_ok else 1)" || exit 1
+                   proxy_config = get_random_proxy_config(); \
+                   exit(0 if conn and proxy_config else 1)" || exit 1
 
 # Default command with proper argument handling
 CMD ["python", "scraper.py"] 
